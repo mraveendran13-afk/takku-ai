@@ -10,9 +10,15 @@ load_dotenv()
 
 app = FastAPI(title="Takku AI", version="1.0.0")
 
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "https://takkuai.netlify.app",  # Your live site
+        "http://localhost:3000",        # Local development
+        "http://localhost:5173",        # Vite development
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
