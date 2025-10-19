@@ -9,7 +9,7 @@ interface Message {
   isError?: boolean;
 }
 
-const API_BASE_URL = 'https://5d9299956a87ba.lhr.life/api/v1';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
 
 const TakkuChat: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
