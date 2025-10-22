@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import FileUpload from './FileUpload';
+import { useSpeechRecognition } from './useSpeechRecognition';
 import './App.css';
 
 interface Message {
@@ -34,9 +35,25 @@ const TakkuChat: React.FC = () => {
   ]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Speech recognition hook
+  const {
+    isListening,
+    transcript,
+    isSupported,
+    startListening,
+    stopListening,
+  } = useSpeechRecognition();
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Update input when speech is recognized
+  useEffect(() => {
+    if (transcript) {
+      setInput(transcript);
+    }
+  }, [transcript]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -227,6 +244,16 @@ const TakkuChat: React.FC = () => {
             disabled={loading}
           />
           <div className="input-buttons">
+            {isSupported && (
+              <button 
+                className={`microphone-button ${isListening ? 'listening' : ''}`}
+                onClick={isListening ? stopListening : startListening}
+                disabled={loading}
+                title={isListening ? 'Stop recording' : 'Start voice input'}
+              >
+                {isListening ? '⏹️' : '🎤'}
+              </button>
+            )}
             <button 
               className="attachment-button"
               onClick={toggleFileUpload}
