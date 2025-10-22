@@ -18,12 +18,6 @@ interface CurrentFile {
   content: string;
 }
 
-interface UserPreferences {
-  userName: string;
-  preferredLanguage: string;
-  theme: string;
-}
-
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app/api/v1';
 
 const TakkuChat: React.FC = () => {
@@ -35,12 +29,7 @@ const TakkuChat: React.FC = () => {
   const [fileUploadMode, setFileUploadMode] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
   
-  // User preferences stored in localStorage
-  const [userPreferences, setUserPreferences] = useLocalStorage<UserPreferences>('takku-user-preferences', {
-    userName: '',
-    preferredLanguage: 'auto',
-    theme: 'default'
-  });
+  // REMOVED: Unused userPreferences variables that were causing the ESLint error
 
   const [suggestions] = useState([
     "What's the best way to learn programming?",
