@@ -1,8 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import os
+import tempfile
+import pdfplumber
+from docx import Document
+from PIL import Image
+import io
 from dotenv import load_dotenv
 import groq
 
@@ -14,9 +19,9 @@ app = FastAPI(title="Takku AI", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://takkuai.netlify.app",  # Your live site
-        "http://localhost:3000",        # Local development
-        "http://localhost:5173",        # Vite development
+        "https://takkuai.netlify.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -33,6 +38,43 @@ class AIResponse(BaseModel):
     answer: str
     usage: Optional[Dict]
     model: str
+
+class FileUploadResponse(BaseModel):
+    filename: str
+    content_preview: str
+    message: str
+
+# Helper function to extract text from files
+async def extract_text_from_file(file: UploadFile) -> str:
+    content = await file.read()
+    
+    if file.content_type == "application/pdf":
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            
+            text = ""
+            with pdfplumber.open(tmp_file.name) as pdf:
+                for page in pdf.pages:
+                    text += page.extract_text() or ""
+            os.unlink(tmp_file.name)
+            return text
+            
+    elif file.content_type in ["text/plain", "text/markdown"]:
+        return content.decode('utf-8')
+        
+    elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            
+            doc = Document(tmp_file.name)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            os.unlink(tmp_file.name)
+            return text
+            
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
 
 @app.get("/")
 async def root():
@@ -96,6 +138,68 @@ Be conversational and engaging!"""
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+
+# NEW FILE UPLOAD ENDPOINTS
+@app.post("/api/v1/upload", response_model=FileUploadResponse)
+async def upload_file(file: UploadFile = File(...)):
+    try:
+        # Extract text from uploaded file
+        extracted_text = await extract_text_from_file(file)
+        
+        # Create a preview (first 500 characters)
+        preview = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
+        
+        return {
+            "filename": file.filename,
+            "content_preview": preview,
+            "message": f"Successfully uploaded {file.filename}! I can now answer questions about this document. 🐱"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+@app.post("/api/v1/ask-about-file", response_model=AIResponse)
+async def ask_about_file(question: Question, file: UploadFile = File(...)):
+    try:
+        # Extract text from file
+        file_content = await extract_text_from_file(file)
+        
+        system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You have access to a document that the user uploaded. Answer their questions based on the document content.
+
+Key traits:
+- You're Takku the superhero cat AI
+- You were created by Manu Raveendran
+- Use the document content to provide accurate answers
+- If the answer isn't in the document, say so politely
+- Be enthusiastic and helpful!"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Document content:\n{file_content}\n\nUser question: {question.question}"}
+        ]
+        
+        if question.conversation_history:
+            messages.extend(question.conversation_history)
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",  # Use powerful model for document analysis
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.3,
+        )
+
+        return {
+            "answer": response.choices[0].message.content,
+            "usage": {
+                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens
+            },
+            "model": "llama-3.3-70b-versatile"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file question: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
