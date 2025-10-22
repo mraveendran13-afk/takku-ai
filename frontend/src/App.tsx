@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
+import FileUpload from './FileUpload';
 import './App.css';
 
 interface Message {
@@ -9,12 +10,19 @@ interface Message {
   isError?: boolean;
 }
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
+interface CurrentFile {
+  filename: string;
+  content: string;
+}
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app/api/v1';
 
 const TakkuChat: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
+  const [fileUploadMode, setFileUploadMode] = useState(false);
   const [suggestions] = useState([
     "What's the best way to learn programming?",
     "Tell me a fun fact about space!",
@@ -33,6 +41,28 @@ const TakkuChat: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const handleFileProcessed = (filename: string, content: string) => {
+    setCurrentFile({ filename, content });
+    setFileUploadMode(true);
+    
+    const fileMessage: Message = {
+      role: 'assistant',
+      content: `📁 I've loaded "${filename}"! Now you can ask me questions about this document. What would you like to know? 🐱`
+    };
+    setMessages(prev => [...prev, fileMessage]);
+  };
+
+  const exitFileMode = () => {
+    setCurrentFile(null);
+    setFileUploadMode(false);
+    
+    const exitMessage: Message = {
+      role: 'assistant', 
+      content: "Switched back to regular chat mode! What would you like to talk about? 🐱"
+    };
+    setMessages(prev => [...prev, exitMessage]);
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -44,10 +74,18 @@ const TakkuChat: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/ask`, {
+      let endpoint = `${API_BASE_URL}/ask`;
+      let requestData: any = {
         question: input,
         conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content }))
-      });
+      };
+
+      if (fileUploadMode && currentFile) {
+        endpoint = `${API_BASE_URL}/ask`;
+        requestData.question = `About the file "${currentFile.filename}": ${input}`;
+      }
+
+      const response = await axios.post(endpoint, requestData);
 
       const aiMessage: Message = { 
         role: 'assistant', 
@@ -98,6 +136,13 @@ const TakkuChat: React.FC = () => {
           <div className="welcome-message">
             <h3>Welcome to Takku AI!</h3>
             <p>Ask me anything! I'm your friendly AI bud here to help with questions, advice, or just chat!</p>
+            
+            {/* File Upload Section */}
+            <div className="file-upload-section">
+              <h4>📁 Or upload a document:</h4>
+              <FileUpload onFileProcessed={handleFileProcessed} />
+            </div>
+
             <div className="suggestions">
               <h4>Try asking:</h4>
               {suggestions.map((suggestion, index) => (
@@ -109,6 +154,22 @@ const TakkuChat: React.FC = () => {
                   {suggestion}
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* File Mode Indicator */}
+        {fileUploadMode && currentFile && (
+          <div className="file-mode-indicator">
+            <div className="file-info">
+              <span className="file-icon">📁</span>
+              <span className="file-name">{currentFile.filename}</span>
+              <button className="exit-file-mode" onClick={exitFileMode}>
+                ✕ Exit File Mode
+              </button>
+            </div>
+            <div className="file-preview">
+              <strong>Preview:</strong> {currentFile.content}
             </div>
           </div>
         )}
@@ -148,7 +209,7 @@ const TakkuChat: React.FC = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask Takku anything... (Press Enter to send)"
+            placeholder={fileUploadMode ? `Ask about "${currentFile?.filename}"...` : "Ask Takku anything... (Press Enter to send)"}
             rows={3}
             disabled={loading}
           />
