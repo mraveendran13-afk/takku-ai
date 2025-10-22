@@ -3,6 +3,7 @@ import axios from 'axios';
 import FileUpload from './FileUpload';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { useLocalStorage } from './useLocalStorage';
+import { useCopyToClipboard } from './useCopyToClipboard';
 import './App.css';
 
 interface Message {
@@ -29,8 +30,6 @@ const TakkuChat: React.FC = () => {
   const [fileUploadMode, setFileUploadMode] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
   
-  // REMOVED: Unused userPreferences variables that were causing the ESLint error
-
   const [suggestions] = useState([
     "What's the best way to learn programming?",
     "Tell me a fun fact about space!",
@@ -166,6 +165,25 @@ const TakkuChat: React.FC = () => {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Copy to clipboard component for individual messages
+  const CopyButton: React.FC<{ content: string }> = ({ content }) => {
+    const { isCopied, copyToClipboard } = useCopyToClipboard();
+
+    const handleCopy = () => {
+      copyToClipboard(content);
+    };
+
+    return (
+      <button 
+        className={`copy-button ${isCopied ? 'copied' : ''}`}
+        onClick={handleCopy}
+        title={isCopied ? 'Copied!' : 'Copy to clipboard'}
+      >
+        {isCopied ? '✅' : '📋'}
+      </button>
+    );
+  };
+
   return (
     <div className="takku-chat-container">
       {/* Header */}
@@ -228,6 +246,12 @@ const TakkuChat: React.FC = () => {
             className={`message ${message.role} ${message.isError ? 'error' : ''}`}
           >
             <div className="message-content">
+              <div className="message-header">
+                <span className="message-role">
+                  {message.role === 'user' ? 'You' : 'Takku'}
+                </span>
+                <CopyButton content={message.content} />
+              </div>
               <div className="message-text">{message.content}</div>
               <div className="message-meta">
                 {message.model && (

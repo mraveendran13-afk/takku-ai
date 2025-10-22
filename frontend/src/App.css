@@ -788,3 +788,85 @@
     align-items: flex-end;
   }
 }
+/* Copy to Clipboard Styles */
+.copy-button {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  transition: all 0.3s ease;
+  opacity: 0.7;
+}
+
+.copy-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.copy-button.copied {
+  background: rgba(76, 175, 80, 0.3);
+  opacity: 1;
+}
+
+/* Message header with copy button */
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.message-role {
+  font-weight: 600;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+/* User message specific copy button styles */
+.message.user .copy-button {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.message.user .copy-button:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Assistant message specific copy button styles */
+.message.assistant .copy-button {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.message.assistant .copy-button:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Responsive copy buttons */
+@media (max-width: 768px) {
+  .copy-button {
+    font-size: 0.7rem;
+    padding: 3px 6px;
+  }
+  
+  .message-header {
+    margin-bottom: 6px;
+  }
+  
+  .message-role {
+    font-size: 0.8rem;
+  }
+}
+
+/* Copy success animation */
+@keyframes copySuccess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.copy-button.copied {
+  animation: copySuccess 0.3s ease;
+}
