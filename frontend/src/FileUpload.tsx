@@ -73,7 +73,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
       // Fixed API URL - uses environment variable or defaults to production
       const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app';
       
-      const response = await axios.post(`${API_BASE_URL}/api/v1/upload`, formData, {
+      const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

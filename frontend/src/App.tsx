@@ -23,6 +23,7 @@ const TakkuChat: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
   const [fileUploadMode, setFileUploadMode] = useState(false);
+  const [showFileUpload, setShowFileUpload] = useState(false);
   const [suggestions] = useState([
     "What's the best way to learn programming?",
     "Tell me a fun fact about space!",
@@ -44,6 +45,7 @@ const TakkuChat: React.FC = () => {
   const handleFileProcessed = (filename: string, content: string) => {
     setCurrentFile({ filename, content });
     setFileUploadMode(true);
+    setShowFileUpload(false);
     
     const fileMessage: Message = {
       role: 'assistant',
@@ -61,6 +63,10 @@ const TakkuChat: React.FC = () => {
       content: "Switched back to regular chat mode! What would you like to talk about? 🐱"
     };
     setMessages(prev => [...prev, exitMessage]);
+  };
+
+  const toggleFileUpload = () => {
+    setShowFileUpload(!showFileUpload);
   };
 
   const sendMessage = async () => {
@@ -136,12 +142,6 @@ const TakkuChat: React.FC = () => {
           <div className="welcome-message">
             <h3>Welcome to Takku AI!</h3>
             <p>Ask me anything! I'm your friendly AI bud here to help with questions, advice, or just chat!</p>
-            
-            {/* File Upload Section */}
-            <div className="file-upload-section">
-              <h4>📁 Or upload a document:</h4>
-              <FileUpload onFileProcessed={handleFileProcessed} />
-            </div>
 
             <div className="suggestions">
               <h4>Try asking:</h4>
@@ -202,6 +202,19 @@ const TakkuChat: React.FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* File Upload Area - Shows when attachment button is clicked */}
+      {showFileUpload && (
+        <div className="file-upload-area">
+          <div className="file-upload-header">
+            <h4>📁 Upload a document</h4>
+            <button className="close-upload" onClick={() => setShowFileUpload(false)}>
+              ✕
+            </button>
+          </div>
+          <FileUpload onFileProcessed={handleFileProcessed} />
+        </div>
+      )}
+
       {/* Input Area */}
       <div className="input-container">
         <div className="input-wrapper">
@@ -213,13 +226,23 @@ const TakkuChat: React.FC = () => {
             rows={3}
             disabled={loading}
           />
-          <button 
-            onClick={sendMessage} 
-            disabled={!input.trim() || loading}
-            className="send-button"
-          >
-            {loading ? '⏳' : '📤'}
-          </button>
+          <div className="input-buttons">
+            <button 
+              className="attachment-button"
+              onClick={toggleFileUpload}
+              disabled={loading}
+              title="Attach file"
+            >
+              📎
+            </button>
+            <button 
+              onClick={sendMessage} 
+              disabled={!input.trim() || loading}
+              className="send-button"
+            >
+              {loading ? '⏳' : '📤'}
+            </button>
+          </div>
         </div>
         <div className="disclaimer">
           <small>⚠️ AI assistant - Always verify important information from reliable sources.</small>
