@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import os
@@ -15,21 +16,27 @@ load_dotenv()
 
 app = FastAPI(title="Takku AI", version="1.0.0")
 
-# CORS configuration
+# Enhanced CORS configuration - MUST be before routes
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://takkuai.netlify.app",
         "http://localhost:3000",
         "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
+# Initialize Groq client
 client = groq.Client(api_key=os.getenv("GROQ_API_KEY"))
 
+# Pydantic models
 class Question(BaseModel):
     question: str
     conversation_history: Optional[List[Dict]] = None
@@ -76,14 +83,17 @@ async def extract_text_from_file(file: UploadFile) -> str:
     else:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
+# Root endpoint
 @app.get("/")
 async def root():
-    return {"status": "Takku AI API is running"}
+    return {"status": "Takku AI API is running", "version": "1.0.0"}
 
+# Health check
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "timestamp": "ok"}
 
+# Suggestions endpoint
 @app.get("/api/v1/suggestions")
 async def get_suggestions():
     suggestions = [
@@ -96,6 +106,7 @@ async def get_suggestions():
     ]
     return {"suggestions": suggestions}
 
+# Main ask endpoint
 @app.post("/api/v1/ask", response_model=AIResponse)
 async def ask_question(question: Question):
     try:
@@ -126,20 +137,20 @@ Be conversational and engaging!"""
             temperature=0.3,
         )
 
-        return {
-            "answer": response.choices[0].message.content,
-            "usage": {
+        return AIResponse(
+            answer=response.choices[0].message.content,
+            usage={
                 "total_tokens": response.usage.total_tokens,
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens
             },
-            "model": "llama-3.1-8b-instant"
-        }
+            model="llama-3.1-8b-instant"
+        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
-# NEW FILE UPLOAD ENDPOINTS
+# File upload endpoint
 @app.post("/api/v1/upload", response_model=FileUploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     try:
@@ -149,15 +160,16 @@ async def upload_file(file: UploadFile = File(...)):
         # Create a preview (first 500 characters)
         preview = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
         
-        return {
-            "filename": file.filename,
-            "content_preview": preview,
-            "message": f"Successfully uploaded {file.filename}! I can now answer questions about this document. 🐱"
-        }
+        return FileUploadResponse(
+            filename=file.filename,
+            content_preview=preview,
+            message=f"Successfully uploaded {file.filename}! I can now answer questions about this document. 🐱"
+        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
+# Ask about file endpoint
 @app.post("/api/v1/ask-about-file", response_model=AIResponse)
 async def ask_about_file(question: Question, file: UploadFile = File(...)):
     try:
@@ -188,19 +200,37 @@ Key traits:
             temperature=0.3,
         )
 
-        return {
-            "answer": response.choices[0].message.content,
-            "usage": {
+        return AIResponse(
+            answer=response.choices[0].message.content,
+            usage={
                 "total_tokens": response.usage.total_tokens,
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens
             },
-            "model": "llama-3.3-70b-versatile"
-        }
+            model="llama-3.3-70b-versatile"
+        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file question: {str(e)}")
 
+# Explicit OPTIONS handler for problematic endpoints (fallback)
+@app.options("/api/v1/ask")
+async def options_ask():
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "https://takkuai.netlify.app",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=int(os.getenv("PORT", 8000)),
+        log_level="info"
+    )
