@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import FileUpload from './FileUpload';
 import { useSpeechRecognition } from './useSpeechRecognition';
+import { useLocalStorage } from './useLocalStorage';
 import './App.css';
 
 interface Message {
@@ -9,6 +10,7 @@ interface Message {
   content: string;
   model?: string;
   isError?: boolean;
+  timestamp?: number;
 }
 
 interface CurrentFile {
@@ -16,15 +18,30 @@ interface CurrentFile {
   content: string;
 }
 
+interface UserPreferences {
+  userName: string;
+  preferredLanguage: string;
+  theme: string;
+}
+
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app/api/v1';
 
 const TakkuChat: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Use localStorage for persistent chat history
+  const [messages, setMessages] = useLocalStorage<Message[]>('takku-chat-history', []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
   const [fileUploadMode, setFileUploadMode] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
+  
+  // User preferences stored in localStorage
+  const [userPreferences, setUserPreferences] = useLocalStorage<UserPreferences>('takku-user-preferences', {
+    userName: '',
+    preferredLanguage: 'auto',
+    theme: 'default'
+  });
+
   const [suggestions] = useState([
     "What's the best way to learn programming?",
     "Tell me a fun fact about space!",
@@ -33,6 +50,7 @@ const TakkuChat: React.FC = () => {
     "Explain quantum computing in simple terms",
     "What's your favorite superhero movie?"
   ]);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Speech recognition hook
@@ -66,7 +84,8 @@ const TakkuChat: React.FC = () => {
     
     const fileMessage: Message = {
       role: 'assistant',
-      content: `📁 I've loaded "${filename}"! Now you can ask me questions about this document. What would you like to know? 🐱`
+      content: `📁 I've loaded "${filename}"! Now you can ask me questions about this document. What would you like to know? 🐱`,
+      timestamp: Date.now()
     };
     setMessages(prev => [...prev, fileMessage]);
   };
@@ -77,7 +96,8 @@ const TakkuChat: React.FC = () => {
     
     const exitMessage: Message = {
       role: 'assistant', 
-      content: "Switched back to regular chat mode! What would you like to talk about? 🐱"
+      content: "Switched back to regular chat mode! What would you like to talk about? 🐱",
+      timestamp: Date.now()
     };
     setMessages(prev => [...prev, exitMessage]);
   };
@@ -86,10 +106,20 @@ const TakkuChat: React.FC = () => {
     setShowFileUpload(!showFileUpload);
   };
 
+  const clearChatHistory = () => {
+    if (window.confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+      setMessages([]);
+    }
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
-    const userMessage: Message = { role: 'user', content: input };
+    const userMessage: Message = { 
+      role: 'user', 
+      content: input,
+      timestamp: Date.now()
+    };
     const updatedMessages = [...messages, userMessage];
     
     setMessages(updatedMessages);
@@ -113,7 +143,8 @@ const TakkuChat: React.FC = () => {
       const aiMessage: Message = { 
         role: 'assistant', 
         content: response.data.answer,
-        model: response.data.model
+        model: response.data.model,
+        timestamp: Date.now()
       };
       
       setMessages([...updatedMessages, aiMessage]);
@@ -121,7 +152,8 @@ const TakkuChat: React.FC = () => {
       const errorMessage: Message = { 
         role: 'assistant', 
         content: 'Sorry, I encountered an error. Please try again.',
-        isError: true
+        isError: true,
+        timestamp: Date.now()
       };
       setMessages([...updatedMessages, errorMessage]);
     } finally {
@@ -140,6 +172,11 @@ const TakkuChat: React.FC = () => {
     }
   };
 
+  // Format timestamp for display
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   return (
     <div className="takku-chat-container">
       {/* Header */}
@@ -149,6 +186,11 @@ const TakkuChat: React.FC = () => {
           <div>
             <h1>Takku your AI bud</h1>
             <p>Ask anything - Your friendly AI companion</p>
+            {messages.length > 0 && (
+              <button className="clear-chat-btn" onClick={clearChatHistory}>
+                🗑️ Clear Chat History
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -198,9 +240,14 @@ const TakkuChat: React.FC = () => {
           >
             <div className="message-content">
               <div className="message-text">{message.content}</div>
-              {message.model && (
-                <div className="message-model">Generated by {message.model}</div>
-              )}
+              <div className="message-meta">
+                {message.model && (
+                  <span className="message-model">Generated by {message.model}</span>
+                )}
+                {message.timestamp && (
+                  <span className="message-time">{formatTime(message.timestamp)}</span>
+                )}
+              </div>
             </div>
           </div>
         ))}
@@ -272,7 +319,7 @@ const TakkuChat: React.FC = () => {
           </div>
         </div>
         <div className="disclaimer">
-          <small>⚠️ AI assistant - Always verify important information from reliable sources.</small>
+          <small>⚠️ AI assistant - Chat history is stored locally in your browser</small>
         </div>
       </div>
     </div>

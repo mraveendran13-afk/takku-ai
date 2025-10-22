@@ -689,3 +689,102 @@
   margin-top: 5px;
   font-weight: 500;
 }
+/* Chat History Management Styles */
+.clear-chat-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  color: white;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-top: 8px;
+  padding: 6px 12px;
+  transition: all 0.3s ease;
+}
+
+.clear-chat-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Message Metadata Styles */
+.message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.message-model {
+  font-style: italic;
+}
+
+.message-time {
+  color: #6c757d;
+}
+
+/* User message specific meta styles */
+.message.user .message-meta {
+  justify-content: flex-end;
+}
+
+.message.user .message-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Storage indicator */
+.storage-indicator {
+  text-align: center;
+  color: #6c757d;
+  font-size: 0.8rem;
+  margin-top: 5px;
+}
+
+/* Enhanced welcome message for returning users */
+.welcome-message.returning-user {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+}
+
+.welcome-message.returning-user h3 {
+  color: white;
+}
+
+.welcome-message.returning-user .suggestions h4 {
+  color: white;
+}
+
+/* Chat history stats */
+.chat-stats {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 10px 0;
+  text-align: center;
+}
+
+.chat-stats p {
+  margin: 5px 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .clear-chat-btn {
+    font-size: 0.7rem;
+    padding: 4px 10px;
+  }
+  
+  .message-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  
+  .message.user .message-meta {
+    align-items: flex-end;
+  }
+}
