@@ -27,7 +27,6 @@ const TakkuChat: React.FC = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
-  const [fileUploadMode, setFileUploadMode] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
   
   const [suggestions] = useState([
@@ -67,27 +66,25 @@ const TakkuChat: React.FC = () => {
 
   const handleFileProcessed = (filename: string, content: string) => {
     setCurrentFile({ filename, content });
-    setFileUploadMode(true);
     setShowFileUpload(false);
     
     const fileMessage: Message = {
       role: 'assistant',
-      content: `📁 I've loaded "${filename}"! Now you can ask me questions about this document. What would you like to know? 🐱`,
+      content: `📁 I've loaded "${filename}"! You can now ask me questions about this document anytime. 🐱`,
       timestamp: Date.now()
     };
     setMessages(prev => [...prev, fileMessage]);
   };
 
-  const exitFileMode = () => {
+  const removeCurrentFile = () => {
     setCurrentFile(null);
-    setFileUploadMode(false);
     
-    const exitMessage: Message = {
+    const removeMessage: Message = {
       role: 'assistant', 
-      content: "Switched back to regular chat mode! What would you like to talk about? 🐱",
+      content: "I've cleared the loaded document. What would you like to talk about now? 🐱",
       timestamp: Date.now()
     };
-    setMessages(prev => [...prev, exitMessage]);
+    setMessages(prev => [...prev, removeMessage]);
   };
 
   const toggleFileUpload = () => {
@@ -97,6 +94,7 @@ const TakkuChat: React.FC = () => {
   const clearChatHistory = () => {
     if (window.confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
       setMessages([]);
+      setCurrentFile(null); // Also clear any loaded file
     }
   };
 
@@ -121,13 +119,14 @@ const TakkuChat: React.FC = () => {
         conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content }))
       };
 
-      if (fileUploadMode && currentFile) {
-        // FIXED: Use the correct endpoint and send file content
+      // SMART FILE HANDLING: Always send file content if available
+      // Takku will intelligently decide when to use it
+      if (currentFile) {
         endpoint = `${API_BASE_URL}/ask-about-file-content`;
         requestData = {
           question: input,
           conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content })),
-          file_content: currentFile.content  // Send the actual file content
+          file_content: currentFile.content
         };
       }
 
@@ -200,12 +199,28 @@ const TakkuChat: React.FC = () => {
             <p>Ask anything - Your friendly AI companion</p>
             {messages.length > 0 && (
               <button className="clear-chat-btn" onClick={clearChatHistory}>
-                🗑️ Clear Chat History
+                🗑️ Clear Chat
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {/* Active File Indicator - Always visible when file is loaded */}
+      {currentFile && (
+        <div className="active-file-indicator">
+          <div className="file-info">
+            <span className="file-icon">📁</span>
+            <span className="file-name">{currentFile.filename}</span>
+            <button className="remove-file" onClick={removeCurrentFile} title="Remove document">
+              ✕
+            </button>
+          </div>
+          <div className="file-preview">
+            <strong>Loaded:</strong> {currentFile.content.substring(0, 100)}...
+          </div>
+        </div>
+      )}
 
       {/* Messages Area */}
       <div className="messages-container">
@@ -225,22 +240,6 @@ const TakkuChat: React.FC = () => {
                   {suggestion}
                 </button>
               ))}
-            </div>
-          </div>
-        )}
-
-        {/* File Mode Indicator */}
-        {fileUploadMode && currentFile && (
-          <div className="file-mode-indicator">
-            <div className="file-info">
-              <span className="file-icon">📁</span>
-              <span className="file-name">{currentFile.filename}</span>
-              <button className="exit-file-mode" onClick={exitFileMode}>
-                ✕ Exit File Mode
-              </button>
-            </div>
-            <div className="file-preview">
-              <strong>Preview:</strong> {currentFile.content}
             </div>
           </div>
         )}
@@ -304,7 +303,7 @@ const TakkuChat: React.FC = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder={fileUploadMode ? `Ask about "${currentFile?.filename}"...` : "Ask Takku anything... (Press Enter to send)"}
+            placeholder={currentFile ? `Ask about "${currentFile.filename}" or anything else...` : "Ask Takku anything... (Press Enter to send)"}
             rows={3}
             disabled={loading}
           />
