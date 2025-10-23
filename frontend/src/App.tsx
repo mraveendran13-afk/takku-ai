@@ -122,11 +122,11 @@ const TakkuChat: React.FC = () => {
       // SMART FILE HANDLING: Always send file content if available
       // Takku will intelligently decide when to use it
       if (currentFile) {
-        endpoint = `${API_BASE_URL}/ask-about-file-content`;
+        // FIXED: Send file_content as query parameter instead of JSON body
+        endpoint = `${API_BASE_URL}/ask-about-file-content?file_content=${encodeURIComponent(currentFile.content)}`;
         requestData = {
           question: input,
-          conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content })),
-          file_content: currentFile.content
+          conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content }))
         };
       }
 
