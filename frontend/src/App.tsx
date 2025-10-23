@@ -122,8 +122,13 @@ const TakkuChat: React.FC = () => {
       };
 
       if (fileUploadMode && currentFile) {
-        endpoint = `${API_BASE_URL}/ask`;
-        requestData.question = `About the file "${currentFile.filename}": ${input}`;
+        // FIXED: Use the correct endpoint and send file content
+        endpoint = `${API_BASE_URL}/ask-about-file-content`;
+        requestData = {
+          question: input,
+          conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content })),
+          file_content: currentFile.content  // Send the actual file content
+        };
       }
 
       const response = await axios.post(endpoint, requestData);

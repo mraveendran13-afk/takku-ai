@@ -131,7 +131,7 @@ Be conversational and engaging!"""
         messages.append({"role": "user", "content": question.question})
 
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="compound-beta-mini",
             messages=messages,
             max_tokens=800,
             temperature=0.3,
@@ -144,7 +144,7 @@ Be conversational and engaging!"""
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens
             },
-            model="llama-3.1-8b-instant"
+            model="compound-beta-mini"
         )
         
     except Exception as e:
@@ -169,7 +169,7 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
-# Ask about file endpoint
+# Ask about file endpoint (for direct file uploads)
 @app.post("/api/v1/ask-about-file", response_model=AIResponse)
 async def ask_about_file(question: Question, file: UploadFile = File(...)):
     try:
@@ -194,7 +194,7 @@ Key traits:
             messages.extend(question.conversation_history)
 
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # Use powerful model for document analysis
+            model="compound-beta-mini",
             messages=messages,
             max_tokens=1000,
             temperature=0.3,
@@ -207,7 +207,48 @@ Key traits:
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens
             },
-            model="llama-3.3-70b-versatile"
+            model="compound-beta-mini"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file question: {str(e)}")
+
+# New endpoint that accepts file content as JSON (for frontend)
+@app.post("/api/v1/ask-about-file-content", response_model=AIResponse)
+async def ask_about_file_content(question: Question, file_content: str):
+    try:
+        system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You have access to a document that the user uploaded. Answer their questions based on the document content.
+
+Key traits:
+- You're Takku the superhero cat AI
+- You were created by Manu Raveendran
+- Use the document content to provide accurate answers
+- If the answer isn't in the document, say so politely
+- Be enthusiastic and helpful!"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Document content:\n{file_content}\n\nUser question: {question.question}"}
+        ]
+        
+        if question.conversation_history:
+            messages.extend(question.conversation_history)
+
+        response = client.chat.completions.create(
+            model="compound-beta-mini",
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.3,
+        )
+
+        return AIResponse(
+            answer=response.choices[0].message.content,
+            usage={
+                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens
+            },
+            model="compound-beta-mini"
         )
         
     except Exception as e:
