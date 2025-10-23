@@ -11,6 +11,11 @@ from PIL import Image
 import io
 from dotenv import load_dotenv
 import groq
+import pinecone
+import uuid
+from sentence_transformers import SentenceTransformer
+import json
+from datetime import datetime
 
 load_dotenv()
 
@@ -36,6 +41,29 @@ app.add_middleware(
 # Initialize Groq client
 client = groq.Client(api_key=os.getenv("GROQ_API_KEY"))
 
+# Initialize Pinecone for memory
+pinecone.init(
+    api_key=os.getenv("PINECONE_API_KEY"),
+    environment=os.getenv("PINECONE_ENVIRONMENT")
+)
+index_name = os.getenv("PINECONE_INDEX_NAME", "soaring-pine")
+
+# Initialize embedding model (free local model)
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Ensure Pinecone index exists
+try:
+    if index_name not in pinecone.list_indexes():
+        pinecone.create_index(
+            name=index_name,
+            dimension=384,  # all-MiniLM-L6-v2 dimension
+            metric='cosine'
+        )
+    index = pinecone.Index(index_name)
+except Exception as e:
+    print(f"Pinecone initialization warning: {e}")
+    index = None
+
 # Pydantic models
 class Question(BaseModel):
     question: str
@@ -50,6 +78,13 @@ class FileUploadResponse(BaseModel):
     filename: str
     content_preview: str
     message: str
+
+class MemorySearchRequest(BaseModel):
+    query: str
+    top_k: Optional[int] = 5
+
+class MemorySearchResponse(BaseModel):
+    memories: List[Dict]
 
 # Helper function to extract text from files
 async def extract_text_from_file(file: UploadFile) -> str:
@@ -83,6 +118,77 @@ async def extract_text_from_file(file: UploadFile) -> str:
     else:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
+# Memory functions
+def store_memory(conversation_text: str, metadata: Dict = None):
+    """Store a conversation in Pinecone memory"""
+    if index is None:
+        return
+    
+    try:
+        # Generate embedding
+        embedding = embedding_model.encode(conversation_text).tolist()
+        
+        # Prepare metadata
+        if metadata is None:
+            metadata = {}
+        
+        memory_id = str(uuid.uuid4())
+        metadata.update({
+            "text": conversation_text,
+            "timestamp": datetime.now().isoformat(),
+            "type": "conversation"
+        })
+        
+        # Store in Pinecone
+        index.upsert(vectors=[(memory_id, embedding, metadata)])
+        return memory_id
+    except Exception as e:
+        print(f"Error storing memory: {e}")
+        return None
+
+def search_memories(query: str, top_k: int = 5) -> List[Dict]:
+    """Search for relevant memories"""
+    if index is None:
+        return []
+    
+    try:
+        # Generate query embedding
+        query_embedding = embedding_model.encode(query).tolist()
+        
+        # Search Pinecone
+        results = index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            include_metadata=True
+        )
+        
+        memories = []
+        for match in results.matches:
+            memories.append({
+                "text": match.metadata.get("text", ""),
+                "score": match.score,
+                "timestamp": match.metadata.get("timestamp", ""),
+                "id": match.id
+            })
+        
+        return memories
+    except Exception as e:
+        print(f"Error searching memories: {e}")
+        return []
+
+def get_conversation_context(user_question: str, top_k: int = 3) -> str:
+    """Get relevant context from past conversations"""
+    memories = search_memories(user_question, top_k)
+    
+    if not memories:
+        return ""
+    
+    context = "Relevant past conversations:\n"
+    for i, memory in enumerate(memories, 1):
+        context += f"{i}. {memory['text']}\n"
+    
+    return context
+
 # Root endpoint
 @app.get("/")
 async def root():
@@ -106,10 +212,19 @@ async def get_suggestions():
     ]
     return {"suggestions": suggestions}
 
-# Main ask endpoint
+# Memory search endpoint
+@app.post("/api/v1/search-memories", response_model=MemorySearchResponse)
+async def search_memories_endpoint(request: MemorySearchRequest):
+    memories = search_memories(request.query, request.top_k)
+    return MemorySearchResponse(memories=memories)
+
+# Main ask endpoint with memory
 @app.post("/api/v1/ask", response_model=AIResponse)
 async def ask_question(question: Question):
     try:
+        # Get relevant context from memory
+        memory_context = get_conversation_context(question.question)
+        
         system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything. You have a playful side but are always helpful.
 
 Key traits:
@@ -125,6 +240,10 @@ Be conversational and engaging!"""
 
         messages = [{"role": "system", "content": system_prompt}]
         
+        # Add memory context if available
+        if memory_context:
+            messages.append({"role": "system", "content": memory_context})
+        
         if question.conversation_history:
             messages.extend(question.conversation_history)
         
@@ -137,8 +256,14 @@ Be conversational and engaging!"""
             temperature=0.3,
         )
 
+        answer = response.choices[0].message.content
+
+        # Store this conversation in memory
+        conversation_text = f"User: {question.question}\nTakku: {answer}"
+        store_memory(conversation_text)
+
         return AIResponse(
-            answer=response.choices[0].message.content,
+            answer=answer,
             usage={
                 "total_tokens": response.usage.total_tokens,
                 "prompt_tokens": response.usage.prompt_tokens,
