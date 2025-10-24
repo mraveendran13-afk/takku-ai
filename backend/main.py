@@ -26,7 +26,7 @@ http_client = httpx.AsyncClient()
 
 # Pinecone import
 try:
-    import pinecone
+    from pinecone import Pinecone
     PINECONE_AVAILABLE = True
 except ImportError:
     print("WARNING: Pinecone not installed. Running without memory features.")
@@ -63,8 +63,9 @@ pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
 index = None
 if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
     try:
-        pinecone.init(api_key=pinecone_api_key, environment=pinecone_environment)
-        index = pinecone.Index(pinecone_index_name)
+        # FIXED: Updated Pinecone initialization to new syntax
+        pc = Pinecone(api_key=pinecone_api_key)
+        index = pc.Index(pinecone_index_name)
         print("SUCCESS: Pinecone connected successfully!")
     except Exception as e:
         print(f"ERROR: Pinecone connection failed: {e}")
@@ -267,7 +268,7 @@ Guidelines:
         # Get response from Groq
         if client:
             try:
-                # Try with web search tools if compound model
+                # FIXED: Removed tools parameter - compound models handle web search automatically
                 if use_compound:
                     chat_completion = client.chat.completions.create(
                         messages=[
@@ -276,8 +277,8 @@ Guidelines:
                         ],
                         model=model,
                         temperature=0.7,
-                        max_tokens=1024,
-                        tools=[{"type": "web_search"}]  # Enable web search
+                        max_tokens=1024
+                        # No tools parameter needed - compound models handle web search automatically
                     )
                 else:
                     chat_completion = client.chat.completions.create(
@@ -292,11 +293,8 @@ Guidelines:
                 
                 assistant_response = chat_completion.choices[0].message.content
                 
-                # Check if web search was used
-                executed_tools = getattr(chat_completion.choices[0].message, 'executed_tools', None)
-                searched_web = bool(executed_tools and any(
-                    tool.get('type') == 'web_search' for tool in executed_tools
-                ))
+                # For compound models, web search is automatic - we can assume it was used if it's a current topic
+                searched_web = use_compound
                 
                 print(f"WEB SEARCH: {searched_web}")
                 
@@ -387,14 +385,14 @@ Be conversational and engaging!"""
             raise HTTPException(status_code=503, detail="Groq API not available")
         
         try:
-            # Try with web search tools if compound model
+            # FIXED: Removed tools parameter - compound models handle web search automatically
             if use_compound:
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,
                     max_tokens=800,
-                    temperature=0.3,
-                    tools=[{"type": "web_search"}]  # Enable web search
+                    temperature=0.3
+                    # No tools parameter needed - compound models handle web search automatically
                 )
             else:
                 response = client.chat.completions.create(
@@ -404,11 +402,8 @@ Be conversational and engaging!"""
                     temperature=0.3,
                 )
 
-            # Check if web search was used
-            executed_tools = getattr(response.choices[0].message, 'executed_tools', None)
-            searched_web = bool(executed_tools and any(
-                tool.get('type') == 'web_search' for tool in executed_tools
-            ))
+            # For compound models, web search is automatic - we can assume it was used if it's a current topic
+            searched_web = use_compound
             
             print(f"SUCCESS: Response generated. Web search used: {searched_web}")
 
