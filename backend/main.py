@@ -4,22 +4,25 @@ from pydantic import BaseModel
 from groq import Groq
 import os
 import uuid
+import httpx
 from datetime import datetime
 from typing import Optional, List, Dict
 import hashlib
 import numpy as np
 
-# Try to import sentence-transformers for proper embeddings
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-    # Load the embedding model (384 dimensions to match our Pinecone index)
-    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("SUCCESS: Sentence transformer model loaded for embeddings!")
-except ImportError:
-    print("WARNING: sentence-transformers not installed. Using fallback embeddings.")
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    embedding_model = None
+# --- Hugging Face API Setup ---
+EMBEDDING_API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+hf_token = os.environ.get("HF_TOKEN")
+if hf_token:
+    API_HEADERS = {"Authorization": f"Bearer {hf_token}"}
+    print("SUCCESS: Hugging Face API token found!")
+else:
+    API_HEADERS = {}
+    print("WARNING: HF_TOKEN not set. Inference API may be rate-limited.")
+
+# Async client for making API calls
+http_client = httpx.AsyncClient()
+# ------------------------------
 
 # Pinecone import
 try:
@@ -30,7 +33,7 @@ except ImportError:
     PINECONE_AVAILABLE = False
 
 # Initialize FastAPI
-app = FastAPI(title="Takku AI", version="2.0.0")
+app = FastAPI(title="Takku AI", version="2.1.0")
 
 # CORS middleware
 app.add_middleware(
@@ -94,30 +97,55 @@ class AIResponse(BaseModel):
     searched_web: Optional[bool] = False
     search_query: Optional[str] = None
 
-def get_embedding(text):
-    """Generate proper semantic embedding for text"""
+async def get_embedding_from_api(text: str):
+    """Generate semantic embedding via Hugging Face API"""
     if not text or not text.strip():
         text = " "  # Ensure we have some text
     
-    if SENTENCE_TRANSFORMERS_AVAILABLE and embedding_model:
-        # Use proper semantic embeddings
-        embedding = embedding_model.encode(text)
-        return embedding.tolist()
-    else:
-        # Fallback to deterministic hash-based embeddings (not ideal)
-        print("WARNING: Using fallback embeddings - memory search may not work well")
-        hash_obj = hashlib.md5(text.encode())
-        hash_int = int(hash_obj.hexdigest()[:8], 16)
-        np.random.seed(hash_int)
-        return np.random.rand(384).tolist()
+    try:
+        response = await http_client.post(
+            EMBEDDING_API_URL,
+            headers=API_HEADERS,
+            json={"inputs": text, "options": {"wait_for_model": True}}
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        # The API returns a 2D array, we want the first (and only) item
+        if isinstance(result, list) and isinstance(result[0], list):
+            return result[0] 
+        else:
+            print(f"ERROR: Unexpected API response format: {result}")
+            return None
 
-def store_conversation_memory(user_id: str, user_message: str, assistant_response: str, conversation_context: str):
+    except Exception as e:
+        print(f"ERROR: Embedding API call failed: {e}")
+        return None
+
+def get_fallback_embedding(text: str):
+    """Fallback to deterministic hash-based embeddings"""
+    print("WARNING: Using fallback embeddings - memory search may not work well")
+    if not text or not text.strip():
+        text = " "
+    hash_obj = hashlib.md5(text.encode())
+    hash_int = int(hash_obj.hexdigest()[:8], 16)
+    np.random.seed(hash_int)
+    return np.random.rand(384).tolist()
+
+async def get_embedding(text: str):
+    """Tries to get API embedding, falls back to hash"""
+    embedding = await get_embedding_from_api(text)
+    if embedding:
+        return embedding
+    return get_fallback_embedding(text)
+
+async def store_conversation_memory(user_id: str, user_message: str, assistant_response: str, conversation_context: str):
     """Store conversation in Pinecone memory"""
     if index is None:
         return
         
     conversation_text = f"User: {user_message}\nAssistant: {assistant_response}\nContext: {conversation_context}"
-    embedding = get_embedding(conversation_text)
+    embedding = await get_embedding(conversation_text)
     
     metadata = {
         "user_id": user_id,
@@ -132,12 +160,12 @@ def store_conversation_memory(user_id: str, user_message: str, assistant_respons
     index.upsert(vectors=[(memory_id, embedding, metadata)])
     print(f"MEMORY: Stored conversation for user {user_id} with ID: {memory_id}")
 
-def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
+async def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
     """Search for related past conversations"""
     if index is None:
         return []
     
-    query_embedding = get_embedding(current_query)
+    query_embedding = await get_embedding(current_query)
     
     try:
         results = index.query(
@@ -166,9 +194,9 @@ def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
         print(f"ERROR: Memory search error: {e}")
         return []
 
-def build_context_from_memories(user_id: str, current_query: str, current_symptoms: str):
+async def build_context_from_memories(user_id: str, current_query: str, current_symptoms: str):
     """Build context from relevant past conversations"""
-    relevant_memories = search_related_memories(user_id, current_query)
+    relevant_memories = await search_related_memories(user_id, current_query)
     
     if not relevant_memories:
         return current_symptoms
@@ -211,7 +239,7 @@ async def chat(request: ChatRequest, x_user_id: str = Header(None)):
         print(f"USER: {user_id}: {user_message}")
         
         # Build enhanced context with memory
-        enhanced_context = build_context_from_memories(user_id, user_message, symptoms)
+        enhanced_context = await build_context_from_memories(user_id, user_message, symptoms)
         
         # Decide model based on web search need
         use_compound = request.use_web_search and needs_web_search(user_message)
@@ -291,7 +319,7 @@ Guidelines:
             searched_web = False
         
         # Store conversation in memory
-        store_conversation_memory(
+        await store_conversation_memory(
             user_id=user_id,
             user_message=user_message,
             assistant_response=assistant_response,
@@ -428,7 +456,7 @@ Be conversational and engaging!"""
 async def root():
     return {
         "status": "Takku AI is running",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "features": ["chat", "memory", "web_search"],
         "timestamp": datetime.now().isoformat()
     }
@@ -441,7 +469,7 @@ async def health_check():
         'pinecone_available': PINECONE_AVAILABLE,
         'groq_available': GROQ_AVAILABLE,
         'web_search': 'enabled',
-        'embedding_model': 'sentence-transformers' if SENTENCE_TRANSFORMERS_AVAILABLE else 'fallback',
+        'embedding_model': 'huggingface-api' if hf_token else 'huggingface-api-no-token',
         'service': 'Takku AI'
     }
 
@@ -466,7 +494,7 @@ async def search_memories(request: SearchRequest, x_user_id: str = Header(None))
             raise HTTPException(status_code=400, detail="X-User-ID header is required for memory search")
             
         user_id = x_user_id
-        memories = search_related_memories(user_id, request.query)
+        memories = await search_related_memories(user_id, request.query)
         
         return {
             'query': request.query,
