@@ -36,7 +36,7 @@ if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
 else:
     client = None
     GROQ_AVAILABLE = False
-    print(⚠️  Groq API key not found - running in demo mode")
+    print("⚠️  Groq API key not found - running in demo mode")
 
 # Initialize Pinecone
 pinecone_api_key = os.environ.get("PINECONE_API_KEY")
