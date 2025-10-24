@@ -191,7 +191,7 @@ async def chat(request: ChatRequest):
         
         # Decide model based on web search need
         use_compound = request.use_web_search and needs_web_search(user_message)
-        model = "groq/compound-mini" if use_compound else "llama3-8b-8192"
+        model = "compound-mini" if use_compound else "llama3-8b-8192"
         
         # Create conversation prompt
         system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant! 
@@ -293,7 +293,7 @@ async def ask_question(question: Question):
         else:
             # Check if web search is needed
             use_compound = needs_web_search(question.question)
-            model = "groq/compound-mini" if use_compound else "llama-3.1-8b-instant"
+            model = "compound-mini" if use_compound else "llama-3.1-8b-instant"
             
             system_prompt = f"""You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything.
 
