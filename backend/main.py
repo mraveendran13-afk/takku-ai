@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Groq client with fallback
+# Initialize Groq client
 groq_api_key = os.environ.get("GROQ_API_KEY")
 if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
     client = Groq(api_key=groq_api_key)
@@ -36,7 +36,7 @@ if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
 else:
     client = None
     GROQ_AVAILABLE = False
-    print("⚠️  Groq API key not found - running in demo mode")
+    print(⚠️  Groq API key not found - running in demo mode")
 
 # Initialize Pinecone
 pinecone_api_key = os.environ.get("PINECONE_API_KEY")
@@ -59,7 +59,7 @@ else:
 class ChatRequest(BaseModel):
     message: str
     symptoms: Optional[str] = ""
-    use_web_search: Optional[bool] = True  # New: Enable/disable web search
+    use_web_search: Optional[bool] = True
 
 class SearchRequest(BaseModel):
     query: str
@@ -175,7 +175,7 @@ def needs_web_search(message: str) -> bool:
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """Original chat endpoint with memory (preserved for compatibility)"""
+    """Original chat endpoint with memory"""
     try:
         user_message = request.message.strip()
         symptoms = request.symptoms.strip()
@@ -189,9 +189,11 @@ async def chat(request: ChatRequest):
         # Build enhanced context with memory
         enhanced_context = build_context_from_memories(user_id, user_message, symptoms)
         
-        # Decide model based on web search need
-        use_compound = request.use_web_search and needs_web_search(user_message)
-        model = "compound-mini" if use_compound else "llama3-8b-8192"
+        # For now, always use regular model (compound models need special handling)
+        model = "llama3-8b-8192"
+        use_compound = False  # Disabled until we fix compound model support
+        
+        print(f"🤖 Using model: {model}")
         
         # Create conversation prompt
         system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant! 
@@ -213,48 +215,24 @@ Guidelines:
         # Get response from Groq
         if client:
             try:
-                if use_compound:
-                    # Use Compound with web search
-                    chat_completion = client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message}
-                        ],
-                        model=model,
-                        temperature=0.7,
-                        max_tokens=1024,
-                        compound_custom={
-                            "tools": {
-                                "enabled_tools": ["web_search"]
-                            }
-                        }
-                    )
-                else:
-                    # Regular model without web search
-                    chat_completion = client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message}
-                        ],
-                        model=model,
-                        temperature=0.7,
-                        max_tokens=1024
-                    )
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
+                    model=model,
+                    temperature=0.7,
+                    max_tokens=1024
+                )
                 
                 assistant_response = chat_completion.choices[0].message.content
-                
-                # Check if web search was used
-                executed_tools = getattr(chat_completion.choices[0].message, 'executed_tools', None)
-                searched_web = bool(executed_tools and any(
-                    tool.get('type') == 'web_search' for tool in executed_tools
-                ))
+                searched_web = False  # Web search disabled for now
                 
             except Exception as e:
                 print(f"⚠️ Groq API error: {e}")
                 assistant_response = f"I'm having trouble accessing my full capabilities right now. However, regarding '{user_message}', I can tell you that the memory system is {'active' if index else 'inactive'}."
                 searched_web = False
         else:
-            # Demo response when Groq is not available
             assistant_response = f"I understand you're asking about: '{user_message}'. In a full setup, I would provide detailed guidance. The memory system is {'active' if index else 'inactive'}."
             searched_web = False
         
@@ -283,17 +261,15 @@ Guidelines:
 
 @app.post("/api/v1/ask", response_model=AIResponse)
 async def ask_question(question: Question):
-    """New endpoint for general Q&A with web search"""
+    """New endpoint for general Q&A"""
     try:
         # Use game context if provided, otherwise use default
         if question.game_context:
             system_prompt = question.game_context
-            model = "llama-3.1-8b-instant"  # Don't use compound for games
-            use_compound = False
+            model = "llama-3.1-8b-instant"
         else:
-            # Check if web search is needed
-            use_compound = needs_web_search(question.question)
-            model = "compound-mini" if use_compound else "llama-3.1-8b-instant"
+            # For now, always use regular model (compound models need special handling)
+            model = "llama-3.1-8b-instant"
             
             system_prompt = f"""You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything.
 
@@ -306,9 +282,10 @@ Key traits:
 - You're always ready to assist with questions, advice, or just chat
 - When asked "Who created you?" or similar, proudly say "I was created by Manu Raveendran!"
 - Current date: {datetime.now().strftime('%B %d, %Y')}
-{'- You have access to web search for current information!' if use_compound else ''}
 
 Be conversational and engaging!"""
+
+        print(f"🤖 Using model: {model}")
 
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -324,33 +301,16 @@ Be conversational and engaging!"""
             raise HTTPException(status_code=503, detail="Groq API not available")
         
         try:
-            if use_compound:
-                # Use Compound with web search explicitly enabled
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_tokens=800,
-                    temperature=0.3,
-                    compound_custom={
-                        "tools": {
-                            "enabled_tools": ["web_search"]
-                        }
-                    }
-                )
-            else:
-                # Regular model without compound features
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_tokens=800,
-                    temperature=0.3,
-                )
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=800,
+                temperature=0.3,
+            )
 
-            # Check if web search was used
-            executed_tools = getattr(response.choices[0].message, 'executed_tools', None)
-            searched_web = bool(executed_tools and any(
-                tool.get('type') == 'web_search' for tool in executed_tools
-            ))
+            searched_web = False  # Web search disabled for now
+            
+            print(f"✅ Response generated.")
 
             return AIResponse(
                 answer=response.choices[0].message.content,
@@ -379,7 +339,7 @@ async def root():
     return {
         "status": "Takku AI is running",
         "version": "2.0.0",
-        "features": ["chat", "memory", "web_search"],
+        "features": ["chat", "memory"],
         "timestamp": datetime.now().isoformat()
     }
 
@@ -390,7 +350,7 @@ async def health_check():
         'memory_system': 'active' if index else 'inactive',
         'pinecone_available': PINECONE_AVAILABLE,
         'groq_available': GROQ_AVAILABLE,
-        'web_search': 'enabled',
+        'web_search': 'disabled',  # Changed to disabled
         'service': 'Takku AI'
     }
 
@@ -400,9 +360,7 @@ async def get_suggestions():
     suggestions = [
         "What's the best way to learn programming?",
         "Tell me a fun fact about space!",
-        "What's the weather like today?",
         "What are some good books to read?",
-        "What's trending in tech news today?",
         "Tell me about the latest AI developments"
     ]
     return {"suggestions": suggestions}
