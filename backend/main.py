@@ -159,9 +159,9 @@ def build_context_from_memories(user_id: str, current_query: str, current_sympto
     
     return context
 
-def get_user_id_from_request():
-    """Generate user ID (simplified for FastAPI)"""
-    return str(uuid.uuid4())
+def get_user_id():
+    """Generate consistent user ID for testing - frontend should send X-User-ID header in production"""
+    return "default-user"  # Temporary fix - makes memory consistent for testing
 
 def needs_web_search(message: str) -> bool:
     """Detect if message needs current information"""
@@ -183,7 +183,7 @@ async def chat(request: ChatRequest):
         if not user_message:
             raise HTTPException(status_code=400, detail="No message provided")
         
-        user_id = get_user_id_from_request()
+        user_id = get_user_id()  # Now uses consistent ID
         print(f"USER: {user_id}: {user_message}")
         
         # Build enhanced context with memory
@@ -436,7 +436,7 @@ async def get_suggestions():
 async def search_memories(request: SearchRequest):
     """Search conversation memories"""
     try:
-        user_id = get_user_id_from_request()
+        user_id = get_user_id()  # Now uses consistent ID
         memories = search_related_memories(user_id, request.query)
         
         return {
