@@ -12,7 +12,7 @@ try:
     import pinecone
     PINECONE_AVAILABLE = True
 except ImportError:
-    print("❌ Pinecone not installed. Running without memory features.")
+    print("WARNING: Pinecone not installed. Running without memory features.")
     PINECONE_AVAILABLE = False
 
 # Initialize FastAPI
@@ -27,16 +27,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Groq client
+# Initialize Groq client with proper compound support
 groq_api_key = os.environ.get("GROQ_API_KEY")
 if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
     client = Groq(api_key=groq_api_key)
     GROQ_AVAILABLE = True
-    print("✅ Groq client initialized successfully!")
+    print("SUCCESS: Groq client initialized successfully!")
 else:
     client = None
     GROQ_AVAILABLE = False
-    print("⚠️  Groq API key not found - running in demo mode")
+    print("WARNING: Groq API key not found - running in demo mode")
 
 # Initialize Pinecone
 pinecone_api_key = os.environ.get("PINECONE_API_KEY")
@@ -48,12 +48,12 @@ if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
     try:
         pinecone.init(api_key=pinecone_api_key, environment=pinecone_environment)
         index = pinecone.Index(pinecone_index_name)
-        print("✅ Pinecone connected successfully!")
+        print("SUCCESS: Pinecone connected successfully!")
     except Exception as e:
-        print(f"❌ Pinecone connection failed: {e}")
+        print(f"ERROR: Pinecone connection failed: {e}")
         index = None
 else:
-    print("⚠️  Pinecone not configured - running without memory")
+    print("WARNING: Pinecone not configured - running without memory")
 
 # Pydantic models
 class ChatRequest(BaseModel):
@@ -106,7 +106,7 @@ def store_conversation_memory(user_id: str, user_message: str, assistant_respons
     
     memory_id = str(uuid.uuid4())
     index.upsert(vectors=[(memory_id, embedding, metadata)])
-    print(f"💾 Memory stored: {memory_id}")
+    print(f"MEMORY: Stored conversation with ID: {memory_id}")
 
 def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
     """Search for related past conversations"""
@@ -135,11 +135,11 @@ def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
                     "timestamp": memory_data.get("timestamp", "")
                 })
         
-        print(f"🔍 Found {len(relevant_memories)} relevant memories")
+        print(f"SEARCH: Found {len(relevant_memories)} relevant memories")
         return relevant_memories
         
     except Exception as e:
-        print(f"❌ Memory search error: {e}")
+        print(f"ERROR: Memory search error: {e}")
         return []
 
 def build_context_from_memories(user_id: str, current_query: str, current_symptoms: str):
@@ -184,16 +184,16 @@ async def chat(request: ChatRequest):
             raise HTTPException(status_code=400, detail="No message provided")
         
         user_id = get_user_id_from_request()
-        print(f"👤 User {user_id}: {user_message}")
+        print(f"USER: {user_id}: {user_message}")
         
         # Build enhanced context with memory
         enhanced_context = build_context_from_memories(user_id, user_message, symptoms)
         
-        # For now, always use regular model (compound models need special handling)
-        model = "llama3-8b-8192"
-        use_compound = False  # Disabled until we fix compound model support
+        # Decide model based on web search need
+        use_compound = request.use_web_search and needs_web_search(user_message)
+        model = "groq/compound-mini" if use_compound else "llama3-8b-8192"
         
-        print(f"🤖 Using model: {model}")
+        print(f"MODEL: Using {model} (web search: {use_compound})")
         
         # Create conversation prompt
         system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant! 
@@ -215,22 +215,52 @@ Guidelines:
         # Get response from Groq
         if client:
             try:
+                # Try with web search tools if compound model
+                if use_compound:
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message}
+                        ],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        tools=[{"type": "web_search"}]  # Enable web search
+                    )
+                else:
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message}
+                        ],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1024
+                    )
+                
+                assistant_response = chat_completion.choices[0].message.content
+                
+                # Check if web search was used
+                executed_tools = getattr(chat_completion.choices[0].message, 'executed_tools', None)
+                searched_web = bool(executed_tools and any(
+                    tool.get('type') == 'web_search' for tool in executed_tools
+                ))
+                
+                print(f"WEB SEARCH: {searched_web}")
+                
+            except Exception as e:
+                print(f"WARNING: Groq API error: {e}")
+                # Fallback to regular model
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message}
                     ],
-                    model=model,
+                    model="llama3-8b-8192",
                     temperature=0.7,
                     max_tokens=1024
                 )
-                
                 assistant_response = chat_completion.choices[0].message.content
-                searched_web = False  # Web search disabled for now
-                
-            except Exception as e:
-                print(f"⚠️ Groq API error: {e}")
-                assistant_response = f"I'm having trouble accessing my full capabilities right now. However, regarding '{user_message}', I can tell you that the memory system is {'active' if index else 'inactive'}."
                 searched_web = False
         else:
             assistant_response = f"I understand you're asking about: '{user_message}'. In a full setup, I would provide detailed guidance. The memory system is {'active' if index else 'inactive'}."
@@ -244,7 +274,7 @@ Guidelines:
             conversation_context=enhanced_context
         )
         
-        print(f"🤖 Takku: {assistant_response[:100]}...")
+        print(f"RESPONSE: {assistant_response[:100]}...")
         
         return {
             'response': assistant_response,
@@ -256,20 +286,22 @@ Guidelines:
         }
         
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/v1/ask", response_model=AIResponse)
 async def ask_question(question: Question):
-    """New endpoint for general Q&A"""
+    """New endpoint for general Q&A with web search"""
     try:
         # Use game context if provided, otherwise use default
         if question.game_context:
             system_prompt = question.game_context
             model = "llama-3.1-8b-instant"
+            use_compound = False
         else:
-            # For now, always use regular model (compound models need special handling)
-            model = "llama-3.1-8b-instant"
+            # Check if web search is needed
+            use_compound = needs_web_search(question.question)
+            model = "groq/compound-mini" if use_compound else "llama-3.1-8b-instant"
             
             system_prompt = f"""You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything.
 
@@ -282,10 +314,11 @@ Key traits:
 - You're always ready to assist with questions, advice, or just chat
 - When asked "Who created you?" or similar, proudly say "I was created by Manu Raveendran!"
 - Current date: {datetime.now().strftime('%B %d, %Y')}
+{'- You have access to web search for current information!' if use_compound else ''}
 
 Be conversational and engaging!"""
 
-        print(f"🤖 Using model: {model}")
+        print(f"MODEL: Using {model} (web search: {use_compound})")
 
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -301,16 +334,30 @@ Be conversational and engaging!"""
             raise HTTPException(status_code=503, detail="Groq API not available")
         
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=800,
-                temperature=0.3,
-            )
+            # Try with web search tools if compound model
+            if use_compound:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=800,
+                    temperature=0.3,
+                    tools=[{"type": "web_search"}]  # Enable web search
+                )
+            else:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=800,
+                    temperature=0.3,
+                )
 
-            searched_web = False  # Web search disabled for now
+            # Check if web search was used
+            executed_tools = getattr(response.choices[0].message, 'executed_tools', None)
+            searched_web = bool(executed_tools and any(
+                tool.get('type') == 'web_search' for tool in executed_tools
+            ))
             
-            print(f"✅ Response generated.")
+            print(f"SUCCESS: Response generated. Web search used: {searched_web}")
 
             return AIResponse(
                 answer=response.choices[0].message.content,
@@ -325,13 +372,31 @@ Be conversational and engaging!"""
             )
         
         except Exception as e:
-            print(f"Error in Groq API call: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+            print(f"ERROR: Groq API call failed: {str(e)}")
+            # Fallback to regular model
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=messages,
+                max_tokens=800,
+                temperature=0.3,
+            )
+            
+            return AIResponse(
+                answer=response.choices[0].message.content,
+                usage={
+                    "total_tokens": response.usage.total_tokens,
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens
+                },
+                model="llama-3.1-8b-instant",
+                searched_web=False,
+                search_query=None
+            )
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in ask_question: {str(e)}")
+        print(f"ERROR: ask_question failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
 @app.get("/")
@@ -339,7 +404,7 @@ async def root():
     return {
         "status": "Takku AI is running",
         "version": "2.0.0",
-        "features": ["chat", "memory"],
+        "features": ["chat", "memory", "web_search"],
         "timestamp": datetime.now().isoformat()
     }
 
@@ -350,7 +415,7 @@ async def health_check():
         'memory_system': 'active' if index else 'inactive',
         'pinecone_available': PINECONE_AVAILABLE,
         'groq_available': GROQ_AVAILABLE,
-        'web_search': 'disabled',  # Changed to disabled
+        'web_search': 'enabled',
         'service': 'Takku AI'
     }
 
@@ -360,7 +425,9 @@ async def get_suggestions():
     suggestions = [
         "What's the best way to learn programming?",
         "Tell me a fun fact about space!",
+        "What's the weather like today?",
         "What are some good books to read?",
+        "What's trending in tech news today?",
         "Tell me about the latest AI developments"
     ]
     return {"suggestions": suggestions}
