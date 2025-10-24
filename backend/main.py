@@ -1,231 +1,301 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from groq import Groq
 import os
-import tempfile
-import pdfplumber
-from docx import Document
-from PIL import Image
-import io
-from dotenv import load_dotenv
-import groq
-import pinecone
 import uuid
-from sentence_transformers import SentenceTransformer
-import json
 from datetime import datetime
+from typing import Optional, List, Dict
 
-load_dotenv()
+# Pinecone import
+try:
+    import pinecone
+    PINECONE_AVAILABLE = True
+except ImportError:
+    print("❌ Pinecone not installed. Running without memory features.")
+    PINECONE_AVAILABLE = False
 
-app = FastAPI(title="Takku AI", version="1.0.0")
+# Initialize FastAPI
+app = FastAPI(title="Takku AI", version="2.0.0")
 
-# Enhanced CORS configuration - MUST be before routes
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://takkuai.netlify.app",
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
-# Initialize Groq client
-client = groq.Client(api_key=os.getenv("GROQ_API_KEY"))
+# Initialize Groq client with fallback
+groq_api_key = os.environ.get("GROQ_API_KEY")
+if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
+    client = Groq(api_key=groq_api_key)
+    GROQ_AVAILABLE = True
+    print("✅ Groq client initialized successfully!")
+else:
+    client = None
+    GROQ_AVAILABLE = False
+    print("⚠️  Groq API key not found - running in demo mode")
 
-# Initialize Pinecone for memory
-pinecone.init(
-    api_key=os.getenv("PINECONE_API_KEY"),
-    environment=os.getenv("PINECONE_ENVIRONMENT")
-)
-index_name = os.getenv("PINECONE_INDEX_NAME", "soaring-pine")
+# Initialize Pinecone
+pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+pinecone_index_name = os.environ.get("PINECONE_INDEX_NAME")
+pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
 
-# Initialize embedding model (free local model)
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# Ensure Pinecone index exists
-try:
-    if index_name not in pinecone.list_indexes():
-        pinecone.create_index(
-            name=index_name,
-            dimension=384,  # all-MiniLM-L6-v2 dimension
-            metric='cosine'
-        )
-    index = pinecone.Index(index_name)
-except Exception as e:
-    print(f"Pinecone initialization warning: {e}")
-    index = None
+index = None
+if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
+    try:
+        pinecone.init(api_key=pinecone_api_key, environment=pinecone_environment)
+        index = pinecone.Index(pinecone_index_name)
+        print("✅ Pinecone connected successfully!")
+    except Exception as e:
+        print(f"❌ Pinecone connection failed: {e}")
+        index = None
+else:
+    print("⚠️  Pinecone not configured - running without memory")
 
 # Pydantic models
+class ChatRequest(BaseModel):
+    message: str
+    symptoms: Optional[str] = ""
+    use_web_search: Optional[bool] = True  # New: Enable/disable web search
+
+class SearchRequest(BaseModel):
+    query: str
+
 class Question(BaseModel):
     question: str
     conversation_history: Optional[List[Dict]] = None
+    game_context: Optional[str] = None
 
 class AIResponse(BaseModel):
     answer: str
     usage: Optional[Dict]
     model: str
+    searched_web: Optional[bool] = False
+    search_query: Optional[str] = None
 
-class FileUploadResponse(BaseModel):
-    filename: str
-    content_preview: str
-    message: str
-
-class MemorySearchRequest(BaseModel):
-    query: str
-    top_k: Optional[int] = 5
-
-class MemorySearchResponse(BaseModel):
-    memories: List[Dict]
-
-# Helper function to extract text from files
-async def extract_text_from_file(file: UploadFile) -> str:
-    content = await file.read()
+def get_embedding(text):
+    """Generate simple deterministic embedding for text"""
+    import hashlib
+    import numpy as np
     
-    if file.content_type == "application/pdf":
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(content)
-            tmp_file.flush()
-            
-            text = ""
-            with pdfplumber.open(tmp_file.name) as pdf:
-                for page in pdf.pages:
-                    text += page.extract_text() or ""
-            os.unlink(tmp_file.name)
-            return text
-            
-    elif file.content_type in ["text/plain", "text/markdown"]:
-        return content.decode('utf-8')
-        
-    elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
-            tmp_file.write(content)
-            tmp_file.flush()
-            
-            doc = Document(tmp_file.name)
-            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            os.unlink(tmp_file.name)
-            return text
-            
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
+    hash_obj = hashlib.md5(text.encode())
+    hash_int = int(hash_obj.hexdigest()[:8], 16)
+    
+    np.random.seed(hash_int)
+    return np.random.rand(384).tolist()
 
-# Memory functions
-def store_memory(conversation_text: str, metadata: Dict = None):
-    """Store a conversation in Pinecone memory"""
+def store_conversation_memory(user_id: str, user_message: str, assistant_response: str, conversation_context: str):
+    """Store conversation in Pinecone memory"""
     if index is None:
         return
+        
+    conversation_text = f"User: {user_message}\nAssistant: {assistant_response}\nContext: {conversation_context}"
+    embedding = get_embedding(conversation_text)
     
-    try:
-        # Generate embedding
-        embedding = embedding_model.encode(conversation_text).tolist()
-        
-        # Prepare metadata
-        if metadata is None:
-            metadata = {}
-        
-        memory_id = str(uuid.uuid4())
-        metadata.update({
-            "text": conversation_text,
-            "timestamp": datetime.now().isoformat(),
-            "type": "conversation"
-        })
-        
-        # Store in Pinecone
-        index.upsert(vectors=[(memory_id, embedding, metadata)])
-        return memory_id
-    except Exception as e:
-        print(f"Error storing memory: {e}")
-        return None
+    metadata = {
+        "user_id": user_id,
+        "user_message": user_message,
+        "assistant_response": assistant_response,
+        "conversation_context": conversation_context,
+        "timestamp": datetime.utcnow().isoformat(),
+        "type": "conversation_memory"
+    }
+    
+    memory_id = str(uuid.uuid4())
+    index.upsert(vectors=[(memory_id, embedding, metadata)])
+    print(f"💾 Memory stored: {memory_id}")
 
-def search_memories(query: str, top_k: int = 5) -> List[Dict]:
-    """Search for relevant memories"""
+def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
+    """Search for related past conversations"""
     if index is None:
         return []
     
+    query_embedding = get_embedding(current_query)
+    
     try:
-        # Generate query embedding
-        query_embedding = embedding_model.encode(query).tolist()
-        
-        # Search Pinecone
         results = index.query(
             vector=query_embedding,
+            filter={"user_id": user_id, "type": "conversation_memory"},
             top_k=top_k,
             include_metadata=True
         )
         
-        memories = []
+        relevant_memories = []
         for match in results.matches:
-            memories.append({
-                "text": match.metadata.get("text", ""),
-                "score": match.score,
-                "timestamp": match.metadata.get("timestamp", ""),
-                "id": match.id
-            })
+            if match.score > 0.7:
+                memory_data = match.metadata
+                relevant_memories.append({
+                    "user_message": memory_data.get("user_message", ""),
+                    "assistant_response": memory_data.get("assistant_response", ""),
+                    "context": memory_data.get("conversation_context", ""),
+                    "similarity_score": match.score,
+                    "timestamp": memory_data.get("timestamp", "")
+                })
         
-        return memories
+        print(f"🔍 Found {len(relevant_memories)} relevant memories")
+        return relevant_memories
+        
     except Exception as e:
-        print(f"Error searching memories: {e}")
+        print(f"❌ Memory search error: {e}")
         return []
 
-def get_conversation_context(user_question: str, top_k: int = 3) -> str:
-    """Get relevant context from past conversations"""
-    memories = search_memories(user_question, top_k)
+def build_context_from_memories(user_id: str, current_query: str, current_symptoms: str):
+    """Build context from relevant past conversations"""
+    relevant_memories = search_related_memories(user_id, current_query)
     
-    if not memories:
-        return ""
+    if not relevant_memories:
+        return current_symptoms
     
-    context = "Relevant past conversations:\n"
-    for i, memory in enumerate(memories, 1):
-        context += f"{i}. {memory['text']}\n"
+    context = f"Current symptoms: {current_symptoms}\n\n"
+    context += "Relevant past conversations:\n"
+    
+    for i, memory in enumerate(relevant_memories, 1):
+        context += f"{i}. Previous concern: {memory['user_message']}\n"
+        context += f"   My advice: {memory['assistant_response']}\n"
+        context += f"   Context: {memory['context']}\n\n"
     
     return context
 
-# Root endpoint
-@app.get("/")
-async def root():
-    return {"status": "Takku AI API is running", "version": "1.0.0"}
+def get_user_id_from_request():
+    """Generate user ID (simplified for FastAPI)"""
+    return str(uuid.uuid4())
 
-# Health check
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": "ok"}
-
-# Suggestions endpoint
-@app.get("/api/v1/suggestions")
-async def get_suggestions():
-    suggestions = [
-        "What's the best way to learn programming?",
-        "Tell me a fun fact about space!",
-        "How can I be more productive?",
-        "What are some good books to read?",
-        "Explain quantum computing in simple terms",
-        "What's your favorite superhero movie?"
+def needs_web_search(message: str) -> bool:
+    """Detect if message needs current information"""
+    keywords = [
+        'today', 'latest', 'current', 'news', 'recent', 'now',
+        'this week', 'this month', 'this year', '2024', '2025',
+        'weather', 'trending', 'happening', 'update', 'breaking'
     ]
-    return {"suggestions": suggestions}
+    message_lower = message.lower()
+    return any(keyword in message_lower for keyword in keywords)
 
-# Memory search endpoint
-@app.post("/api/v1/search-memories", response_model=MemorySearchResponse)
-async def search_memories_endpoint(request: MemorySearchRequest):
-    memories = search_memories(request.query, request.top_k)
-    return MemorySearchResponse(memories=memories)
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    """Original chat endpoint with memory (preserved for compatibility)"""
+    try:
+        user_message = request.message.strip()
+        symptoms = request.symptoms.strip()
+        
+        if not user_message:
+            raise HTTPException(status_code=400, detail="No message provided")
+        
+        user_id = get_user_id_from_request()
+        print(f"👤 User {user_id}: {user_message}")
+        
+        # Build enhanced context with memory
+        enhanced_context = build_context_from_memories(user_id, user_message, symptoms)
+        
+        # Decide model based on web search need
+        use_compound = request.use_web_search and needs_web_search(user_message)
+        model = "groq/compound-mini" if use_compound else "llama3-8b-8192"
+        
+        # Create conversation prompt
+        system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant! 
 
-# Main ask endpoint with memory
+Current Context:
+{enhanced_context}
+
+User's current message: {user_message}
+
+Guidelines:
+- Be empathetic, friendly, and helpful
+- Reference relevant past conversations when helpful
+- Maintain continuity in discussions
+- Always suggest professional help for serious medical concerns
+- Be clear about your limitations as an AI
+- Focus on education and support
+- Current date: {datetime.now().strftime('%B %d, %Y')}"""
+        
+        # Get response from Groq
+        if client:
+            try:
+                if use_compound:
+                    # Use Compound with web search
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message}
+                        ],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        compound_custom={
+                            "tools": {
+                                "enabled_tools": ["web_search"]
+                            }
+                        }
+                    )
+                else:
+                    # Regular model without web search
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message}
+                        ],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1024
+                    )
+                
+                assistant_response = chat_completion.choices[0].message.content
+                
+                # Check if web search was used
+                executed_tools = getattr(chat_completion.choices[0].message, 'executed_tools', None)
+                searched_web = bool(executed_tools and any(
+                    tool.get('type') == 'web_search' for tool in executed_tools
+                ))
+                
+            except Exception as e:
+                print(f"⚠️ Groq API error: {e}")
+                assistant_response = f"I'm having trouble accessing my full capabilities right now. However, regarding '{user_message}', I can tell you that the memory system is {'active' if index else 'inactive'}."
+                searched_web = False
+        else:
+            # Demo response when Groq is not available
+            assistant_response = f"I understand you're asking about: '{user_message}'. In a full setup, I would provide detailed guidance. The memory system is {'active' if index else 'inactive'}."
+            searched_web = False
+        
+        # Store conversation in memory
+        store_conversation_memory(
+            user_id=user_id,
+            user_message=user_message,
+            assistant_response=assistant_response,
+            conversation_context=enhanced_context
+        )
+        
+        print(f"🤖 Takku: {assistant_response[:100]}...")
+        
+        return {
+            'response': assistant_response,
+            'memory_used': len(enhanced_context) > len(symptoms),
+            'memory_system': 'active' if index else 'inactive',
+            'groq_available': GROQ_AVAILABLE,
+            'searched_web': searched_web,
+            'model_used': model
+        }
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.post("/api/v1/ask", response_model=AIResponse)
 async def ask_question(question: Question):
+    """New endpoint for general Q&A with web search"""
     try:
-        # Get relevant context from memory
-        memory_context = get_conversation_context(question.question)
-        
-        system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything. You have a playful side but are always helpful.
+        # Use game context if provided, otherwise use default
+        if question.game_context:
+            system_prompt = question.game_context
+            model = "llama-3.1-8b-instant"  # Don't use compound for games
+            use_compound = False
+        else:
+            # Check if web search is needed
+            use_compound = needs_web_search(question.question)
+            model = "groq/compound-mini" if use_compound else "llama-3.1-8b-instant"
+            
+            system_prompt = f"""You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything.
 
 Key traits:
 - You're Takku the superhero cat AI
@@ -235,168 +305,125 @@ Key traits:
 - You have a playful sense of humor
 - You're always ready to assist with questions, advice, or just chat
 - When asked "Who created you?" or similar, proudly say "I was created by Manu Raveendran!"
+- Current date: {datetime.now().strftime('%B %d, %Y')}
+{'- You have access to web search for current information!' if use_compound else ''}
 
 Be conversational and engaging!"""
 
         messages = [{"role": "system", "content": system_prompt}]
         
-        # Add memory context if available
-        if memory_context:
-            messages.append({"role": "system", "content": memory_context})
-        
+        # Add conversation history
         if question.conversation_history:
             messages.extend(question.conversation_history)
         
+        # Add user question
         messages.append({"role": "user", "content": question.question})
 
-        response = client.chat.completions.create(
-            model="compound-beta-mini",
-            messages=messages,
-            max_tokens=800,
-            temperature=0.3,
-        )
-
-        answer = response.choices[0].message.content
-
-        # Store this conversation in memory
-        conversation_text = f"User: {question.question}\nTakku: {answer}"
-        store_memory(conversation_text)
-
-        return AIResponse(
-            answer=answer,
-            usage={
-                "total_tokens": response.usage.total_tokens,
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens
-            },
-            model="compound-beta-mini"
-        )
+        # Create completion
+        if not client:
+            raise HTTPException(status_code=503, detail="Groq API not available")
         
+        try:
+            if use_compound:
+                # Use Compound with web search explicitly enabled
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=800,
+                    temperature=0.3,
+                    compound_custom={
+                        "tools": {
+                            "enabled_tools": ["web_search"]
+                        }
+                    }
+                )
+            else:
+                # Regular model without compound features
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=800,
+                    temperature=0.3,
+                )
+
+            # Check if web search was used
+            executed_tools = getattr(response.choices[0].message, 'executed_tools', None)
+            searched_web = bool(executed_tools and any(
+                tool.get('type') == 'web_search' for tool in executed_tools
+            ))
+
+            return AIResponse(
+                answer=response.choices[0].message.content,
+                usage={
+                    "total_tokens": response.usage.total_tokens,
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens
+                },
+                model=model,
+                searched_web=searched_web,
+                search_query=question.question if searched_web else None
+            )
+        
+        except Exception as e:
+            print(f"Error in Groq API call: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"Error in ask_question: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
-# File upload endpoint
-@app.post("/api/v1/upload", response_model=FileUploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+@app.get("/")
+async def root():
+    return {
+        "status": "Takku AI is running",
+        "version": "2.0.0",
+        "features": ["chat", "memory", "web_search"],
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        'status': 'healthy', 
+        'memory_system': 'active' if index else 'inactive',
+        'pinecone_available': PINECONE_AVAILABLE,
+        'groq_available': GROQ_AVAILABLE,
+        'web_search': 'enabled',
+        'service': 'Takku AI'
+    }
+
+@app.get("/api/v1/suggestions")
+async def get_suggestions():
+    """Get conversation suggestions"""
+    suggestions = [
+        "What's the best way to learn programming?",
+        "Tell me a fun fact about space!",
+        "What's the weather like today?",
+        "What are some good books to read?",
+        "What's trending in tech news today?",
+        "Tell me about the latest AI developments"
+    ]
+    return {"suggestions": suggestions}
+
+@app.post("/memories/search")
+async def search_memories(request: SearchRequest):
+    """Search conversation memories"""
     try:
-        # Extract text from uploaded file
-        extracted_text = await extract_text_from_file(file)
+        user_id = get_user_id_from_request()
+        memories = search_related_memories(user_id, request.query)
         
-        # Create a preview (first 500 characters)
-        preview = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
-        
-        return FileUploadResponse(
-            filename=file.filename,
-            content_preview=preview,
-            message=f"Successfully uploaded {file.filename}! I can now answer questions about this document. 🐱"
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
-
-# Ask about file endpoint (for direct file uploads)
-@app.post("/api/v1/ask-about-file", response_model=AIResponse)
-async def ask_about_file(question: Question, file: UploadFile = File(...)):
-    try:
-        # Extract text from file
-        file_content = await extract_text_from_file(file)
-        
-        system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You have access to a document that the user uploaded. Answer their questions based on the document content.
-
-Key traits:
-- You're Takku the superhero cat AI
-- You were created by Manu Raveendran
-- Use the document content to provide accurate answers
-- If the answer isn't in the document, say so politely
-- Be enthusiastic and helpful!"""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Document content:\n{file_content}\n\nUser question: {question.question}"}
-        ]
-        
-        if question.conversation_history:
-            messages.extend(question.conversation_history)
-
-        response = client.chat.completions.create(
-            model="compound-beta-mini",
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.3,
-        )
-
-        return AIResponse(
-            answer=response.choices[0].message.content,
-            usage={
-                "total_tokens": response.usage.total_tokens,
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens
-            },
-            model="compound-beta-mini"
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing file question: {str(e)}")
-
-# New endpoint that accepts file content as JSON (for frontend)
-@app.post("/api/v1/ask-about-file-content", response_model=AIResponse)
-async def ask_about_file_content(question: Question, file_content: str):
-    try:
-        system_prompt = """You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You have access to a document that the user uploaded. Answer their questions based on the document content.
-
-Key traits:
-- You're Takku the superhero cat AI
-- You were created by Manu Raveendran
-- Use the document content to provide accurate answers
-- If the answer isn't in the document, say so politely
-- Be enthusiastic and helpful!"""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Document content:\n{file_content}\n\nUser question: {question.question}"}
-        ]
-        
-        if question.conversation_history:
-            messages.extend(question.conversation_history)
-
-        response = client.chat.completions.create(
-            model="compound-beta-mini",
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.3,
-        )
-
-        return AIResponse(
-            answer=response.choices[0].message.content,
-            usage={
-                "total_tokens": response.usage.total_tokens,
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens
-            },
-            model="compound-beta-mini"
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing file question: {str(e)}")
-
-# Explicit OPTIONS handler for problematic endpoints (fallback)
-@app.options("/api/v1/ask")
-async def options_ask():
-    return JSONResponse(
-        content={"message": "OK"},
-        headers={
-            "Access-Control-Allow-Origin": "https://takkuai.netlify.app",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
+        return {
+            'query': request.query,
+            'memories_found': len(memories),
+            'memories': memories
         }
-    )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=int(os.getenv("PORT", 8000)),
-        log_level="info"
-    )
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
