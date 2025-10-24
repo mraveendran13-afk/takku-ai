@@ -11,7 +11,8 @@ import hashlib
 import numpy as np
 
 # --- Hugging Face API Setup ---
-EMBEDDING_API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+# FIXED: Updated to correct Hugging Face API endpoint
+EMBEDDING_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
 hf_token = os.environ.get("HF_TOKEN")
 if hf_token:
     API_HEADERS = {"Authorization": f"Bearer {hf_token}"}
