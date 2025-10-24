@@ -15,14 +15,6 @@ except ImportError:
     print("❌ Pinecone not installed. Running without memory features.")
     PINECONE_AVAILABLE = False
 
-# Sentence transformers
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    print("❌ Sentence transformers not available. Using simple embeddings.")
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-
 # Initialize FastAPI
 app = FastAPI(title="Takku Medical AI", version="1.0.0")
 
@@ -51,12 +43,6 @@ pinecone_api_key = os.environ.get("PINECONE_API_KEY")
 pinecone_index_name = os.environ.get("PINECONE_INDEX_NAME")
 pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
 
-# Initialize embedding model
-if SENTENCE_TRANSFORMERS_AVAILABLE:
-    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-else:
-    embedding_model = None
-
 # Initialize Pinecone
 index = None
 if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
@@ -79,13 +65,16 @@ class SearchRequest(BaseModel):
     query: str
 
 def get_embedding(text):
-    """Generate embedding for text"""
-    if embedding_model:
-        return embedding_model.encode(text).tolist()
-    else:
-        # Simple fallback
-        import random
-        return [random.random() for _ in range(384)]
+    """Generate simple deterministic embedding for text"""
+    import hashlib
+    import numpy as np
+    
+    # Create deterministic pseudo-embeddings based on text hash
+    hash_obj = hashlib.md5(text.encode())
+    hash_int = int(hash_obj.hexdigest()[:8], 16)
+    
+    np.random.seed(hash_int)
+    return np.random.rand(384).tolist()  # Same dimension as before
 
 def store_conversation_memory(user_id: str, user_message: str, assistant_response: str, conversation_context: str):
     """Store conversation in Pinecone memory"""
