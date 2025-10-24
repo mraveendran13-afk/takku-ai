@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -6,6 +6,20 @@ import os
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict
+import hashlib
+import numpy as np
+
+# Try to import sentence-transformers for proper embeddings
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+    # Load the embedding model (384 dimensions to match our Pinecone index)
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+    print("SUCCESS: Sentence transformer model loaded for embeddings!")
+except ImportError:
+    print("WARNING: sentence-transformers not installed. Using fallback embeddings.")
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    embedding_model = None
 
 # Pinecone import
 try:
@@ -27,7 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Groq client with proper compound support
+# Initialize Groq client
 groq_api_key = os.environ.get("GROQ_API_KEY")
 if groq_api_key and groq_api_key != "your_actual_groq_api_key_here":
     client = Groq(api_key=groq_api_key)
@@ -55,6 +69,10 @@ if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
 else:
     print("WARNING: Pinecone not configured - running without memory")
 
+# Model constants for consistency
+MODEL_FAST = "llama-3.1-8b-instant"
+MODEL_WEB = "groq/compound-mini"
+
 # Pydantic models
 class ChatRequest(BaseModel):
     message: str
@@ -77,15 +95,21 @@ class AIResponse(BaseModel):
     search_query: Optional[str] = None
 
 def get_embedding(text):
-    """Generate simple deterministic embedding for text"""
-    import hashlib
-    import numpy as np
+    """Generate proper semantic embedding for text"""
+    if not text or not text.strip():
+        text = " "  # Ensure we have some text
     
-    hash_obj = hashlib.md5(text.encode())
-    hash_int = int(hash_obj.hexdigest()[:8], 16)
-    
-    np.random.seed(hash_int)
-    return np.random.rand(384).tolist()
+    if SENTENCE_TRANSFORMERS_AVAILABLE and embedding_model:
+        # Use proper semantic embeddings
+        embedding = embedding_model.encode(text)
+        return embedding.tolist()
+    else:
+        # Fallback to deterministic hash-based embeddings (not ideal)
+        print("WARNING: Using fallback embeddings - memory search may not work well")
+        hash_obj = hashlib.md5(text.encode())
+        hash_int = int(hash_obj.hexdigest()[:8], 16)
+        np.random.seed(hash_int)
+        return np.random.rand(384).tolist()
 
 def store_conversation_memory(user_id: str, user_message: str, assistant_response: str, conversation_context: str):
     """Store conversation in Pinecone memory"""
@@ -106,7 +130,7 @@ def store_conversation_memory(user_id: str, user_message: str, assistant_respons
     
     memory_id = str(uuid.uuid4())
     index.upsert(vectors=[(memory_id, embedding, metadata)])
-    print(f"MEMORY: Stored conversation with ID: {memory_id}")
+    print(f"MEMORY: Stored conversation for user {user_id} with ID: {memory_id}")
 
 def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
     """Search for related past conversations"""
@@ -125,7 +149,7 @@ def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
         
         relevant_memories = []
         for match in results.matches:
-            if match.score > 0.7:
+            if match.score > 0.3:  # Lower threshold for semantic search
                 memory_data = match.metadata
                 relevant_memories.append({
                     "user_message": memory_data.get("user_message", ""),
@@ -135,7 +159,7 @@ def search_related_memories(user_id: str, current_query: str, top_k: int = 3):
                     "timestamp": memory_data.get("timestamp", "")
                 })
         
-        print(f"SEARCH: Found {len(relevant_memories)} relevant memories")
+        print(f"SEARCH: Found {len(relevant_memories)} relevant memories for user {user_id} (threshold: 0.3)")
         return relevant_memories
         
     except Exception as e:
@@ -159,10 +183,6 @@ def build_context_from_memories(user_id: str, current_query: str, current_sympto
     
     return context
 
-def get_user_id():
-    """Generate consistent user ID for testing - frontend should send X-User-ID header in production"""
-    return "default-user"  # Temporary fix - makes memory consistent for testing
-
 def needs_web_search(message: str) -> bool:
     """Detect if message needs current information"""
     keywords = [
@@ -174,7 +194,7 @@ def needs_web_search(message: str) -> bool:
     return any(keyword in message_lower for keyword in keywords)
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, x_user_id: str = Header(None)):
     """Original chat endpoint with memory"""
     try:
         user_message = request.message.strip()
@@ -183,7 +203,11 @@ async def chat(request: ChatRequest):
         if not user_message:
             raise HTTPException(status_code=400, detail="No message provided")
         
-        user_id = get_user_id()  # Now uses consistent ID
+        # Require user ID for memory functionality
+        if not x_user_id:
+            raise HTTPException(status_code=400, detail="X-User-ID header is required for memory features")
+        
+        user_id = x_user_id
         print(f"USER: {user_id}: {user_message}")
         
         # Build enhanced context with memory
@@ -191,7 +215,7 @@ async def chat(request: ChatRequest):
         
         # Decide model based on web search need
         use_compound = request.use_web_search and needs_web_search(user_message)
-        model = "groq/compound-mini" if use_compound else "llama3-8b-8192"
+        model = MODEL_WEB if use_compound else MODEL_FAST
         
         print(f"MODEL: Using {model} (web search: {use_compound})")
         
@@ -256,7 +280,7 @@ Guidelines:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message}
                     ],
-                    model="llama3-8b-8192",
+                    model=MODEL_FAST,
                     temperature=0.7,
                     max_tokens=1024
                 )
@@ -290,18 +314,18 @@ Guidelines:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/v1/ask", response_model=AIResponse)
-async def ask_question(question: Question):
+async def ask_question(question: Question, x_user_id: str = Header("anonymous")):
     """New endpoint for general Q&A with web search"""
     try:
         # Use game context if provided, otherwise use default
         if question.game_context:
             system_prompt = question.game_context
-            model = "llama-3.1-8b-instant"
+            model = MODEL_FAST
             use_compound = False
         else:
             # Check if web search is needed
             use_compound = needs_web_search(question.question)
-            model = "groq/compound-mini" if use_compound else "llama-3.1-8b-instant"
+            model = MODEL_WEB if use_compound else MODEL_FAST
             
             system_prompt = f"""You are Takku - a friendly, helpful AI bud with the personality of a superhero cat! You're enthusiastic, supportive, and love helping with anything.
 
@@ -318,6 +342,7 @@ Key traits:
 
 Be conversational and engaging!"""
 
+        print(f"USER: {x_user_id} asking: {question.question[:50]}...")
         print(f"MODEL: Using {model} (web search: {use_compound})")
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -375,7 +400,7 @@ Be conversational and engaging!"""
             print(f"ERROR: Groq API call failed: {str(e)}")
             # Fallback to regular model
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=MODEL_FAST,
                 messages=messages,
                 max_tokens=800,
                 temperature=0.3,
@@ -388,7 +413,7 @@ Be conversational and engaging!"""
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens
                 },
-                model="llama-3.1-8b-instant",
+                model=MODEL_FAST,
                 searched_web=False,
                 search_query=None
             )
@@ -416,6 +441,7 @@ async def health_check():
         'pinecone_available': PINECONE_AVAILABLE,
         'groq_available': GROQ_AVAILABLE,
         'web_search': 'enabled',
+        'embedding_model': 'sentence-transformers' if SENTENCE_TRANSFORMERS_AVAILABLE else 'fallback',
         'service': 'Takku AI'
     }
 
@@ -433,10 +459,13 @@ async def get_suggestions():
     return {"suggestions": suggestions}
 
 @app.post("/memories/search")
-async def search_memories(request: SearchRequest):
+async def search_memories(request: SearchRequest, x_user_id: str = Header(None)):
     """Search conversation memories"""
     try:
-        user_id = get_user_id()  # Now uses consistent ID
+        if not x_user_id:
+            raise HTTPException(status_code=400, detail="X-User-ID header is required for memory search")
+            
+        user_id = x_user_id
         memories = search_related_memories(user_id, request.query)
         
         return {

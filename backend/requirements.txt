@@ -10,3 +10,4 @@ Pillow==10.3.0
 python-multipart==0.0.9
 pinecone
 numpy==1.24.3
+sentence-transformers
