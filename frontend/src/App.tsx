@@ -37,7 +37,7 @@ interface KnowledgeDocument {
 }
 
 // FIXED: Removed /api/v1 from base URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production-fa01.up.railway.app';
 const ADMIN_PASSWORD = process.env.REACT_APP_ADMIN_PASSWORD || 'takku';
 
 const TakkuChat: React.FC = () => {
