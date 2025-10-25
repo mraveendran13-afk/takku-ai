@@ -38,7 +38,7 @@ interface KnowledgeDocument {
 
 // FIXED: Removed /api/v1 from base URL
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app';
-const ADMIN_PASSWORD = process.env.REACT_APP_ADMIN_PASSWORD || 'takku-admin-2024';
+const ADMIN_PASSWORD = process.env.REACT_APP_ADMIN_PASSWORD || 'takku';
 
 const TakkuChat: React.FC = () => {
   // Use localStorage for persistent chat history
