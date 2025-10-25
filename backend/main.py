@@ -75,7 +75,7 @@ else:
     print("WARNING: Pinecone not configured - running without memory")
 
 # Admin password for knowledge base management
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "takku-admin-2024")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "takku")
 
 # Model constants for consistency
 MODEL_FAST = "llama-3.1-8b-instant"
