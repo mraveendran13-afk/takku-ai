@@ -931,3 +931,260 @@
     font-size: 0.9rem;
   }
 }
+/* Knowledge Base Admin Styles */
+.admin-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-left: 10px;
+  transition: all 0.3s ease;
+}
+
+.admin-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.admin-btn.active {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}
+
+.header-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* Admin Upload Panel */
+.admin-upload-panel {
+  background: #f8f9fa;
+  border: 2px solid #e9ecef;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.admin-upload-panel h3 {
+  margin: 0 0 20px 0;
+  color: #333;
+  font-size: 1.5em;
+}
+
+.upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-group label {
+  font-weight: 600;
+  color: #555;
+  font-size: 14px;
+}
+
+.form-group input[type="text"] {
+  padding: 10px;
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.3s ease;
+}
+
+.form-group input[type="text"]:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.form-group input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.uploading-indicator {
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+  color: #856404;
+  font-weight: 500;
+}
+
+/* Documents List */
+.documents-list {
+  margin-top: 25px;
+}
+
+.documents-list h4 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 1.2em;
+}
+
+.document-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 10px;
+  transition: all 0.3s ease;
+}
+
+.document-item:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  transform: translateY(-1px);
+}
+
+.doc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.doc-info strong {
+  color: #333;
+  font-size: 16px;
+}
+
+.visibility {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.visibility.public {
+  background: #d4edda;
+  color: #155724;
+}
+
+.visibility.private {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.chunk-count, .upload-date {
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.doc-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.delete-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.3s ease;
+}
+
+.delete-btn:hover {
+  background: #c82333;
+  transform: scale(1.05);
+}
+
+/* Source Citations */
+.source-citations {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+}
+
+.sources-title {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.source-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.source-item:last-child {
+  border-bottom: none;
+}
+
+.source-document {
+  font-weight: 600;
+  color: #495057;
+  flex: 1;
+}
+
+.source-section {
+  color: #6c757d;
+  font-size: 12px;
+  background: #e9ecef;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.source-confidence {
+  color: #28a745;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Knowledge Used Indicator */
+.message.has-knowledge {
+  border-left: 4px solid #28a745;
+}
+
+.message.has-knowledge .message-role::after {
+  content: " 📚";
+  margin-left: 5px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .header-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .admin-btn {
+    margin-left: 0;
+  }
+  
+  .document-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  
+  .doc-actions {
+    align-self: flex-end;
+  }
+  
+  .source-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+}
