@@ -343,5 +343,4 @@ const TakkuChat: React.FC = () => {
   );
 };
 
-export default TakkuChat;"// Deployment trigger" 
-"// Deployment trigger - $(date)" 
+export default TakkuChat;
