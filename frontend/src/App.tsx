@@ -129,11 +129,16 @@ const TakkuChat: React.FC = () => {
   };
 
   const toggleAdminPanel = () => {
-    setShowAdminPanel(!showAdminPanel);
-    if (!showAdminPanel) {
-      loadKnowledgeDocuments();
-    }
-  };
+  console.log('DEBUG: toggleAdminPanel called');
+  console.log('DEBUG: ADMIN_PASSWORD value:', ADMIN_PASSWORD);
+  console.log('DEBUG: userId value:', userId);
+  console.log('DEBUG: API_BASE_URL:', API_BASE_URL);
+  
+  setShowAdminPanel(!showAdminPanel);
+  if (!showAdminPanel) {
+    loadKnowledgeDocuments();
+  }
+};
 
   const clearChatHistory = () => {
     if (window.confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
