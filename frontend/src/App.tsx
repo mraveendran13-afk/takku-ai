@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import FileUpload from './FileUpload';
+import FileUpload from './components/FileUpload';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { useLocalStorage } from './useLocalStorage';
 import { useCopyToClipboard } from './useCopyToClipboard';
