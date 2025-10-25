@@ -19,6 +19,7 @@ interface CurrentFile {
   content: string;
 }
 
+// FIXED: Removed /api/v1 from base URL
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app';
 
 const TakkuChat: React.FC = () => {
@@ -116,7 +117,7 @@ const TakkuChat: React.FC = () => {
     setLoading(true);
 
     try {
-      // FIXED: Use persistent user ID for memory
+      // FIXED: Correct endpoint URL (no /api/v1)
       const endpoint = `${API_BASE_URL}/chat`;
       const requestData = {
         message: input,
@@ -126,7 +127,7 @@ const TakkuChat: React.FC = () => {
 
       const response = await axios.post(endpoint, requestData, {
         headers: {
-          'X-User-ID': userId  // ✅ SAME ID FOR ALL MESSAGES
+          'X-User-ID': userId
         }
       });
 
@@ -138,11 +139,11 @@ const TakkuChat: React.FC = () => {
       };
       
       setMessages([...updatedMessages, aiMessage]);
-    } catch (error) {
-      console.error('API Error:', error);
+    } catch (error: any) {
+      console.error('API Error Details:', error.response?.data || error.message);
       const errorMessage: Message = { 
         role: 'assistant', 
-        content: 'Sorry, I encountered an error. Please try again.',
+        content: `Sorry, I encountered an error: ${error.response?.data?.detail || error.message}`,
         isError: true,
         timestamp: Date.now()
       };
