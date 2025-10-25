@@ -19,7 +19,7 @@ interface CurrentFile {
   content: string;
 }
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app/api/v1';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://takku-ai-production.up.railway.app';
 
 const TakkuChat: React.FC = () => {
   // Use localStorage for persistent chat history
@@ -28,6 +28,9 @@ const TakkuChat: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
   const [showFileUpload, setShowFileUpload] = useState(false);
+  
+  // FIXED: Persistent user ID for memory system
+  const [userId] = useLocalStorage<string>('takku-user-id', 'user-' + Math.random().toString(36).substr(2, 9));
   
   const [suggestions] = useState([
     "What's the best way to learn programming?",
@@ -94,7 +97,7 @@ const TakkuChat: React.FC = () => {
   const clearChatHistory = () => {
     if (window.confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
       setMessages([]);
-      setCurrentFile(null); // Also clear any loaded file
+      setCurrentFile(null);
     }
   };
 
@@ -113,34 +116,30 @@ const TakkuChat: React.FC = () => {
     setLoading(true);
 
     try {
-      let endpoint = `${API_BASE_URL}/ask`;
-      let requestData: any = {
-        question: input,
-        conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content }))
+      // FIXED: Use persistent user ID for memory
+      const endpoint = `${API_BASE_URL}/chat`;
+      const requestData = {
+        message: input,
+        symptoms: currentFile ? `File context: ${currentFile.filename}` : "general conversation",
+        use_web_search: true
       };
 
-      // SMART FILE HANDLING: Always send file content if available
-      // Takku will intelligently decide when to use it
-      if (currentFile) {
-        // FIXED: Send file_content as query parameter instead of JSON body
-        endpoint = `${API_BASE_URL}/ask-about-file-content?file_content=${encodeURIComponent(currentFile.content)}`;
-        requestData = {
-          question: input,
-          conversation_history: updatedMessages.map(msg => ({ role: msg.role, content: msg.content }))
-        };
-      }
-
-      const response = await axios.post(endpoint, requestData);
+      const response = await axios.post(endpoint, requestData, {
+        headers: {
+          'X-User-ID': userId  // ✅ SAME ID FOR ALL MESSAGES
+        }
+      });
 
       const aiMessage: Message = { 
         role: 'assistant', 
-        content: response.data.answer,
-        model: response.data.model,
+        content: response.data.response,
+        model: response.data.model_used,
         timestamp: Date.now()
       };
       
       setMessages([...updatedMessages, aiMessage]);
     } catch (error) {
+      console.error('API Error:', error);
       const errorMessage: Message = { 
         role: 'assistant', 
         content: 'Sorry, I encountered an error. Please try again.',
