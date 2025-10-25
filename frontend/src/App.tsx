@@ -30,8 +30,20 @@ const TakkuChat: React.FC = () => {
   const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null);
   const [showFileUpload, setShowFileUpload] = useState(false);
   
-  // FIXED: Persistent user ID for memory system
-  const [userId] = useLocalStorage<string>('takku-user-id', 'user-' + Math.random().toString(36).substr(2, 9));
+  // FIXED: MANUAL localStorage implementation - guaranteed to work
+  const [userId, setUserId] = useState<string>('');
+
+  useEffect(() => {
+    // Get or create user ID from localStorage
+    let storedUserId = localStorage.getItem('takku-user-id');
+    if (!storedUserId) {
+      storedUserId = 'user-' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('takku-user-id', storedUserId);
+      console.log('Created new User ID:', storedUserId);
+    }
+    setUserId(storedUserId);
+    console.log('Using User ID:', storedUserId);
+  }, []);
   
   const [suggestions] = useState([
     "What's the best way to learn programming?",
@@ -103,7 +115,7 @@ const TakkuChat: React.FC = () => {
   };
 
   const sendMessage = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || !userId) return;
 
     const userMessage: Message = { 
       role: 'user', 
@@ -328,7 +340,7 @@ const TakkuChat: React.FC = () => {
             </button>
             <button 
               onClick={sendMessage} 
-              disabled={!input.trim() || loading}
+              disabled={!input.trim() || loading || !userId}
               className="send-button"
             >
               {loading ? '⏳' : '📤'}
