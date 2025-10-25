@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -9,9 +9,10 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import hashlib
 import numpy as np
+import re
+from urllib.parse import unquote
 
 # --- Hugging Face API Setup ---
-# FIXED: Updated to correct Hugging Face API endpoint
 EMBEDDING_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
 hf_token = os.environ.get("HF_TOKEN")
 if hf_token:
@@ -34,7 +35,7 @@ except ImportError:
     PINECONE_AVAILABLE = False
 
 # Initialize FastAPI
-app = FastAPI(title="Takku AI", version="2.1.0")
+app = FastAPI(title="Takku AI", version="2.2.0")
 
 # CORS middleware
 app.add_middleware(
@@ -64,7 +65,6 @@ pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
 index = None
 if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
     try:
-        # FIXED: Updated Pinecone initialization to new syntax
         pc = Pinecone(api_key=pinecone_api_key)
         index = pc.Index(pinecone_index_name)
         print("SUCCESS: Pinecone connected successfully!")
@@ -73,6 +73,9 @@ if PINECONE_AVAILABLE and pinecone_api_key and pinecone_environment:
         index = None
 else:
     print("WARNING: Pinecone not configured - running without memory")
+
+# Admin password for knowledge base management
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "takku-admin-2024")
 
 # Model constants for consistency
 MODEL_FAST = "llama-3.1-8b-instant"
@@ -99,6 +102,90 @@ class AIResponse(BaseModel):
     searched_web: Optional[bool] = False
     search_query: Optional[str] = None
 
+class KnowledgeDocument(BaseModel):
+    id: str
+    name: str
+    filename: str
+    is_public: bool
+    uploaded_by: str
+    chunk_count: int
+    upload_date: str
+    tags: List[str]
+
+# Text extraction functions
+def extract_text_from_pdf(content: bytes) -> str:
+    """Extract text from PDF - simple implementation"""
+    try:
+        import PyPDF2
+        from io import BytesIO
+        pdf_file = BytesIO(content)
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except ImportError:
+        return "[PDF content - install PyPDF2 for full extraction]"
+    except Exception as e:
+        print(f"PDF extraction error: {e}")
+        return "[PDF content - extraction failed]"
+
+def extract_text_from_docx(content: bytes) -> str:
+    """Extract text from DOCX - simple implementation"""
+    try:
+        from docx import Document
+        from io import BytesIO
+        doc = Document(BytesIO(content))
+        text = ""
+        for paragraph in doc.paragraphs:
+            text += paragraph.text + "\n"
+        return text
+    except ImportError:
+        return "[DOCX content - install python-docx for full extraction]"
+    except Exception as e:
+        print(f"DOCX extraction error: {e}")
+        return "[DOCX content - extraction failed]"
+
+def extract_text_based_on_file_type(content: bytes, filename: str) -> str:
+    """Extract text based on file extension"""
+    if filename.endswith('.pdf'):
+        return extract_text_from_pdf(content)
+    elif filename.endswith('.docx'):
+        return extract_text_from_docx(content)
+    elif filename.endswith('.txt'):
+        return content.decode('utf-8')
+    else:
+        # Try to decode as text
+        try:
+            return content.decode('utf-8')
+        except:
+            return f"[Binary file: {filename}]"
+
+def smart_chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+    """Smart chunking that respects sentence boundaries"""
+    # Split by sentences (roughly)
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        # If adding this sentence would exceed chunk size, save current chunk
+        if len(current_chunk) + len(sentence) > chunk_size and current_chunk:
+            chunks.append(current_chunk.strip())
+            # Keep overlap for context - last few sentences
+            overlap_sentences = current_chunk.split('. ')[-3:]  # Last 3 sentence-like parts
+            current_chunk = '. '.join(overlap_sentences) + '. '
+        else:
+            current_chunk += sentence + '. '
+    
+    # Add the last chunk
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
 async def get_embedding_from_api(text: str):
     """Generate semantic embedding via Hugging Face API"""
     if not text or not text.strip():
@@ -113,7 +200,6 @@ async def get_embedding_from_api(text: str):
         response.raise_for_status()
         result = response.json()
         
-        # The API returns a 2D array, we want the first (and only) item
         if isinstance(result, list) and isinstance(result[0], list):
             return result[0] 
         else:
@@ -196,6 +282,57 @@ async def search_related_memories(user_id: str, current_query: str, top_k: int =
         print(f"ERROR: Memory search error: {e}")
         return []
 
+async def search_knowledge_base(query: str, user_id: str = None, document_filter: Optional[str] = None, top_k: int = 5):
+    """Search knowledge base chunks with user access control"""
+    if index is None:
+        return []
+    
+    query_embedding = await get_embedding(query)
+    
+    # Build filter - only knowledge base chunks that user can access
+    filter_conditions = {"type": {"$eq": "knowledge_base"}}
+    
+    # Access control: public OR uploaded by this user
+    if user_id:
+        filter_conditions["$or"] = [
+            {"is_public": {"$eq": True}},
+            {"uploaded_by": {"$eq": user_id}}
+        ]
+    else:
+        filter_conditions["is_public"] = {"$eq": True}
+    
+    if document_filter:
+        filter_conditions["document_name"] = {"$eq": document_filter}
+    
+    try:
+        results = index.query(
+            vector=query_embedding,
+            filter=filter_conditions,
+            top_k=top_k,
+            include_metadata=True
+        )
+        
+        relevant_chunks = []
+        for match in results.matches:
+            if match.score > 0.6:  # Higher threshold for knowledge accuracy
+                relevant_chunks.append({
+                    "content": match.metadata.get("content", ""),
+                    "document_name": match.metadata.get("document_name", ""),
+                    "document_id": match.metadata.get("document_id", ""),
+                    "chunk_index": match.metadata.get("chunk_index", 0),
+                    "similarity_score": match.score,
+                    "tags": match.metadata.get("tags", []),
+                    "is_public": match.metadata.get("is_public", False),
+                    "uploaded_by": match.metadata.get("uploaded_by", "")
+                })
+        
+        print(f"KNOWLEDGE: Found {len(relevant_chunks)} relevant knowledge chunks for user {user_id}")
+        return relevant_chunks
+        
+    except Exception as e:
+        print(f"ERROR: Knowledge base search failed: {e}")
+        return []
+
 async def build_context_from_memories(user_id: str, current_query: str, current_symptoms: str):
     """Build context from relevant past conversations"""
     relevant_memories = await search_related_memories(user_id, current_query)
@@ -223,9 +360,155 @@ def needs_web_search(message: str) -> bool:
     message_lower = message.lower()
     return any(keyword in message_lower for keyword in keywords)
 
+# Knowledge Base Management Endpoints
+@app.post("/admin/upload-knowledge")
+async def upload_knowledge_document(
+    file: UploadFile = File(...),
+    document_name: str = Form(...),
+    tags: str = Form(""),
+    is_public: bool = Form(True),
+    admin_password: str = Header(...),
+    x_user_id: str = Header(None)
+):
+    """Upload and process knowledge base documents"""
+    if admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    
+    if not x_user_id:
+        raise HTTPException(status_code=400, detail="X-User-ID header required")
+    
+    try:
+        # Read file content
+        content = await file.read()
+        text_content = extract_text_based_on_file_type(content, file.filename)
+        
+        if not text_content.strip():
+            raise HTTPException(status_code=400, detail="No text content found in file")
+        
+        # Generate unique document ID
+        document_id = f"doc_{uuid.uuid4().hex[:8]}"
+        
+        # Smart chunking
+        chunks = smart_chunk_text(text_content, chunk_size=500, overlap=50)
+        
+        # Process chunks with embeddings
+        chunk_vectors = []
+        for i, chunk in enumerate(chunks):
+            embedding = await get_embedding(chunk)
+            
+            chunk_vectors.append({
+                "id": f"kb_{document_id}_{i}",
+                "values": embedding,
+                "metadata": {
+                    "type": "knowledge_base",
+                    "document_id": document_id,
+                    "document_name": document_name,
+                    "original_filename": file.filename,
+                    "chunk_index": i,
+                    "content": chunk,
+                    "tags": [tag.strip() for tag in tags.split(",") if tag.strip()],
+                    "is_public": is_public,
+                    "uploaded_by": x_user_id,
+                    "total_chunks": len(chunks),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+        
+        # Store in Pinecone
+        if index:
+            index.upsert(vectors=chunk_vectors)
+        
+        return {
+            "status": "success",
+            "document_id": document_id,
+            "document_name": document_name,
+            "chunks_processed": len(chunks),
+            "tags": [tag.strip() for tag in tags.split(",") if tag.strip()],
+            "is_public": is_public,
+            "uploaded_by": x_user_id
+        }
+        
+    except Exception as e:
+        print(f"ERROR: Knowledge upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@app.get("/admin/knowledge-documents")
+async def get_knowledge_documents(
+    admin_password: str = Header(...),
+    x_user_id: str = Header(None)
+):
+    """Get all knowledge documents with management info"""
+    if admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    
+    if index is None:
+        return {"documents": []}
+    
+    try:
+        # Get all knowledge base chunks to aggregate documents
+        results = index.query(
+            vector=[0] * 384,  # dummy vector
+            filter={"type": {"$eq": "knowledge_base"}},
+            include_metadata=True,
+            top_k=10000  # Large number to get all documents
+        )
+        
+        documents = {}
+        for match in results.matches:
+            doc_id = match.metadata.get("document_id")
+            if doc_id not in documents:
+                documents[doc_id] = {
+                    "id": doc_id,
+                    "name": match.metadata.get("document_name"),
+                    "filename": match.metadata.get("original_filename"),
+                    "is_public": match.metadata.get("is_public", False),
+                    "uploaded_by": match.metadata.get("uploaded_by"),
+                    "chunk_count": 0,
+                    "upload_date": match.metadata.get("timestamp"),
+                    "tags": match.metadata.get("tags", [])
+                }
+            documents[doc_id]["chunk_count"] += 1
+        
+        return {"documents": list(documents.values())}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
+
+@app.delete("/admin/knowledge-document/{document_id}")
+async def delete_knowledge_document(
+    document_id: str,
+    admin_password: str = Header(...)
+):
+    """Delete a knowledge document and all its chunks"""
+    if admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    
+    if index is None:
+        raise HTTPException(status_code=500, detail="Pinecone not available")
+    
+    try:
+        # First, find all chunks for this document
+        results = index.query(
+            vector=[0] * 384,
+            filter={"document_id": {"$eq": document_id}},
+            include_metadata=True,
+            top_k=10000
+        )
+        
+        chunk_ids = [match.id for match in results.matches]
+        
+        if chunk_ids:
+            index.delete(ids=chunk_ids)
+            return {"status": "success", "chunks_deleted": len(chunk_ids)}
+        else:
+            return {"status": "success", "chunks_deleted": 0, "message": "Document not found"}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
 @app.post("/chat")
 async def chat(request: ChatRequest, x_user_id: str = Header(None)):
-    """Original chat endpoint with memory"""
+    """Enhanced chat endpoint with knowledge base"""
     try:
         user_message = request.message.strip()
         symptoms = request.symptoms.strip()
@@ -240,36 +523,51 @@ async def chat(request: ChatRequest, x_user_id: str = Header(None)):
         user_id = x_user_id
         print(f"USER: {user_id}: {user_message}")
         
-        # Build enhanced context with memory
-        enhanced_context = await build_context_from_memories(user_id, user_message, symptoms)
+        # STEP 1: Search knowledge base first (with user access control)
+        knowledge_chunks = await search_knowledge_base(user_message, user_id)
         
-        # Decide model based on web search need
+        # STEP 2: Build context - knowledge base takes priority
+        context_parts = []
+        
+        if knowledge_chunks:
+            context_parts.append("📚 RELEVANT STUDY MATERIAL:")
+            for i, chunk in enumerate(knowledge_chunks):
+                context_parts.append(f"From {chunk['document_name']} (section {chunk['chunk_index'] + 1}):")
+                context_parts.append(chunk['content'])
+                context_parts.append("")  # Empty line between chunks
+        
+        # STEP 3: Add conversation memory
+        memory_context = await build_context_from_memories(user_id, user_message, symptoms)
+        if memory_context and len(memory_context) > len(symptoms):
+            context_parts.append("💬 PREVIOUS CONVERSATIONS:")
+            context_parts.append(memory_context)
+        
+        # STEP 4: Build final context
+        final_context = "\n".join(context_parts) if context_parts else symptoms
+        
+        # STEP 5: Your existing Groq logic, but with enhanced system prompt
         use_compound = request.use_web_search and needs_web_search(user_message)
         model = MODEL_WEB if use_compound else MODEL_FAST
         
-        print(f"MODEL: Using {model} (web search: {use_compound})")
-        
-        # Create conversation prompt
-        system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant! 
+        system_prompt = f"""You are Takku, a compassionate and friendly superhero cat AI assistant!
 
-Current Context:
-{enhanced_context}
+AVAILABLE CONTEXT:
+{final_context}
 
-User's current message: {user_message}
+USER'S CURRENT QUESTION: {user_message}
 
-Guidelines:
-- Be empathetic, friendly, and helpful
-- Reference relevant past conversations when helpful
-- Maintain continuity in discussions
-- Always suggest professional help for serious medical concerns
-- Be clear about your limitations as an AI
-- Focus on education and support
-- Current date: {datetime.now().strftime('%B %d, %Y')}"""
+KNOWLEDGE BASE GUIDELINES:
+- If the context contains relevant study material, prioritize answering from that
+- Cite which document/section your answer comes from when possible
+- If study material doesn't fully answer, supplement with your general knowledge
+- Be clear about what's from the documents vs your general knowledge
+- Maintain your friendly, helpful superhero cat personality!
+
+Current date: {datetime.now().strftime('%B %d, %Y')}"""
         
         # Get response from Groq
         if client:
             try:
-                # FIXED: Removed tools parameter - compound models handle web search automatically
                 if use_compound:
                     chat_completion = client.chat.completions.create(
                         messages=[
@@ -279,7 +577,6 @@ Guidelines:
                         model=model,
                         temperature=0.7,
                         max_tokens=1024
-                        # No tools parameter needed - compound models handle web search automatically
                     )
                 else:
                     chat_completion = client.chat.completions.create(
@@ -293,8 +590,6 @@ Guidelines:
                     )
                 
                 assistant_response = chat_completion.choices[0].message.content
-                
-                # For compound models, web search is automatic - we can assume it was used if it's a current topic
                 searched_web = use_compound
                 
                 print(f"WEB SEARCH: {searched_web}")
@@ -314,7 +609,7 @@ Guidelines:
                 assistant_response = chat_completion.choices[0].message.content
                 searched_web = False
         else:
-            assistant_response = f"I understand you're asking about: '{user_message}'. In a full setup, I would provide detailed guidance. The memory system is {'active' if index else 'inactive'}."
+            assistant_response = f"I understand you're asking about: '{user_message}'. In a full setup, I would provide detailed guidance. The knowledge base system is {'active' if index else 'inactive'}."
             searched_web = False
         
         # Store conversation in memory
@@ -322,14 +617,30 @@ Guidelines:
             user_id=user_id,
             user_message=user_message,
             assistant_response=assistant_response,
-            conversation_context=enhanced_context
+            conversation_context=final_context
         )
         
         print(f"RESPONSE: {assistant_response[:100]}...")
         
+        # Prepare sources for response
+        sources = []
+        if knowledge_chunks:
+            # Deduplicate by document
+            seen_docs = set()
+            for chunk in knowledge_chunks:
+                if chunk['document_name'] not in seen_docs:
+                    sources.append({
+                        'document': chunk['document_name'],
+                        'section': chunk['chunk_index'] + 1,
+                        'confidence': round(chunk['similarity_score'], 2)
+                    })
+                    seen_docs.add(chunk['document_name'])
+        
         return {
             'response': assistant_response,
-            'memory_used': len(enhanced_context) > len(symptoms),
+            'knowledge_used': len(knowledge_chunks) > 0,
+            'sources': sources,
+            'memory_used': len(final_context) > len(symptoms),
             'memory_system': 'active' if index else 'inactive',
             'groq_available': GROQ_AVAILABLE,
             'searched_web': searched_web,
@@ -386,14 +697,12 @@ Be conversational and engaging!"""
             raise HTTPException(status_code=503, detail="Groq API not available")
         
         try:
-            # FIXED: Removed tools parameter - compound models handle web search automatically
             if use_compound:
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,
                     max_tokens=800,
                     temperature=0.3
-                    # No tools parameter needed - compound models handle web search automatically
                 )
             else:
                 response = client.chat.completions.create(
@@ -403,7 +712,6 @@ Be conversational and engaging!"""
                     temperature=0.3,
                 )
 
-            # For compound models, web search is automatic - we can assume it was used if it's a current topic
             searched_web = use_compound
             
             print(f"SUCCESS: Response generated. Web search used: {searched_web}")
@@ -452,8 +760,8 @@ Be conversational and engaging!"""
 async def root():
     return {
         "status": "Takku AI is running",
-        "version": "2.1.0",
-        "features": ["chat", "memory", "web_search"],
+        "version": "2.2.0",
+        "features": ["chat", "memory", "knowledge_base", "web_search"],
         "timestamp": datetime.now().isoformat()
     }
 
@@ -465,6 +773,7 @@ async def health_check():
         'pinecone_available': PINECONE_AVAILABLE,
         'groq_available': GROQ_AVAILABLE,
         'web_search': 'enabled',
+        'knowledge_base': 'enabled',
         'embedding_model': 'huggingface-api' if hf_token else 'huggingface-api-no-token',
         'service': 'Takku AI'
     }
